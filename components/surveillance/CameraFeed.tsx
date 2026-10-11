@@ -1,99 +1,81 @@
 "use client";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface BoundingBox {
   type: "person" | "trash";
-  x1: number; y1: number; x2: number; y2: number; // pixel coords from vision_engine
+  x1: number; y1: number; x2: number; y2: number;  // pixel coords
   confidence: number;
   label?: string;
   trackId?: number;
 }
 
-interface Props {
-  bboxes:        BoundingBox[];
-  running:       boolean;
-  cameraOffline: boolean;     // true = show CAMERA OFFLINE, no simulation fallback
-  cameraId:      string;
-  smState?:      string;      // state machine state for overlay
-  dwellProgress?: number;     // 0–1 dwell bar fill
+interface ActiveMachine {
+  person_id:      number;
+  waste_id:       number;
+  state:          string;
+  dwell_progress: number;
 }
 
+interface Props {
+  bboxes:          BoundingBox[];
+  running:         boolean;
+  cameraOffline:   boolean;
+  cameraId:        string;
+  mjpegUrl?:       string;        // A9: from /api/camera/config
+  activeMachines?: ActiveMachine[]; // A9: pipeline_state
+}
+
+const MJPEG_FALLBACK = `http://localhost:8001/stream.mjpg`;
+
 /**
- * CameraFeed — real hardware webcam via getUserMedia.
- * Canvas overlay renders real bounding boxes received from vision_engine.py.
+ * CameraFeed v2 (A9)
+ * -------------------
+ * Displays the annotated MJPEG stream from the vision engine as a plain <img>.
+ * - No getUserMedia / no browser camera conflict.
+ * - A canvas overlay renders bboxes received on littering_event WS messages.
+ * - Dwell progress bars and SM state overlays drawn from pipeline_state WS messages.
+ * - CAMERA OFFLINE shown when running=true but camera_status=CAMERA_ERROR.
  *
- * NO simulation mode. If camera is unavailable → CAMERA OFFLINE.
- * NO fake scan-line animations when camera is not active.
- * NO Math.random() anywhere.
+ * Why <img> instead of <video>: MJPEG is multipart/x-mixed-replace — the browser
+ * natively renders it as a continuously updating image with a plain <img> tag.
+ * No Media Source Extensions or getUserMedia needed.
  */
-export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, dwellProgress }: Props) {
-  const videoRef  = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const camActiveRef = useRef(false);
-  const camErrorRef  = useRef<string>("");
+export function CameraFeed({
+  bboxes, running, cameraOffline, cameraId, mjpegUrl, activeMachines = [],
+}: Props) {
+  const canvasRef     = useRef<HTMLCanvasElement>(null);
+  const imgRef        = useRef<HTMLImageElement>(null);
+  const [streamError, setStreamError] = useState(false);
+  const [streamOk,    setStreamOk]    = useState(false);
 
-  // ── Start real webcam ─────────────────────────────────────────────────────
-  const startWebcam = useCallback(async () => {
-    camErrorRef.current = "";
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      camActiveRef.current = true;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Camera access denied";
-      camErrorRef.current = msg;
-      camActiveRef.current = false;
-    }
-  }, []);
+  const streamUrl = mjpegUrl ?? MJPEG_FALLBACK;
 
-  const stopWebcam = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    camActiveRef.current = false;
-  }, []);
-
+  // Reset stream error state when running changes
   useEffect(() => {
-    if (running && !cameraOffline) {
-      startWebcam();
-    } else {
-      stopWebcam();
+    if (running) {
+      setStreamError(false);
+      setStreamOk(false);
     }
-    return () => { stopWebcam(); };
-  }, [running, cameraOffline]); // eslint-disable-line
+  }, [running]);
 
-  // ── Canvas: render bboxes from WebSocket ──────────────────────────────────
+  // Canvas: render littering event bboxes + pipeline dwell bars
   useEffect(() => {
     const canvas = canvasRef.current;
-    const video  = videoRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     let animId: number;
 
     function draw() {
       if (!canvas || !ctx) return;
 
-      // Sync canvas dimensions to video
-      if (video && video.videoWidth > 0) {
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-      } else {
-        canvas.width  = 1280;
-        canvas.height = 720;
-      }
-      const W = canvas.width;
-      const H = canvas.height;
+      // Match canvas size to the MJPEG image element
+      const img = imgRef.current;
+      const W = img?.naturalWidth  || img?.clientWidth  || 1280;
+      const H = img?.naturalHeight || img?.clientHeight || 720;
+      if (canvas.width !== W)  canvas.width  = W;
+      if (canvas.height !== H) canvas.height = H;
 
       ctx.clearRect(0, 0, W, H);
 
@@ -102,19 +84,16 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
         return;
       }
 
-      // Draw bounding boxes (pixel coords from vision_engine — already absolute pixels)
+      // Draw littering_event bboxes (pixel coords from backend)
+      const scaleX = W / 1280;
+      const scaleY = H / 720;
       for (const box of bboxes) {
-        // vision_engine sends pixel coords at original resolution (e.g. 1280x720)
-        // Map to current canvas size
-        const scaleX = W / 1280;
-        const scaleY = H / 720;
         const x1 = box.x1 * scaleX;
         const y1 = box.y1 * scaleY;
         const x2 = box.x2 * scaleX;
         const y2 = box.y2 * scaleY;
         const bw = x2 - x1;
         const bh = y2 - y1;
-
         const col = box.type === "person" ? "#facc15" : "#ef4444";
 
         ctx.strokeStyle = col;
@@ -135,10 +114,7 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
             ctx.stroke();
           });
 
-        // Label with track ID
-        const labelText = box.label
-          ? `${box.label} ${box.confidence.toFixed(0)}%`
-          : `${box.type === "person" ? "Person" : "Waste"} ${box.confidence.toFixed(0)}%`;
+        const labelText = box.label ?? `${box.type === "person" ? "Person" : "Waste"} #${box.trackId ?? "?"}`;
         ctx.font = "bold 11px monospace";
         const tw = ctx.measureText(labelText).width + 8;
         ctx.fillStyle = col;
@@ -147,31 +123,27 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
         ctx.fillText(labelText, x1 + 4, y1 - 5);
       }
 
-      // Dwell progress bar if active
-      if (dwellProgress && dwellProgress > 0 && bboxes.length > 1) {
-        const wasteBbox = bboxes.find((b) => b.type === "trash");
-        if (wasteBbox) {
-          const scaleX = W / 1280;
-          const scaleY = H / 720;
-          const bx1 = wasteBbox.x1 * scaleX;
-          const by2 = wasteBbox.y2 * scaleY;
-          const bboxW = (wasteBbox.x2 - wasteBbox.x1) * scaleX;
-          const barW = bboxW * dwellProgress;
-          ctx.fillStyle = "rgba(255,140,0,0.8)";
-          ctx.fillRect(bx1, by2 + 2, barW, 6);
-        }
-      }
+      // Draw pipeline_state SM overlays: dwell bar + state badge
+      if (activeMachines.length > 0) {
+        ctx.font = "bold 10px monospace";
+        activeMachines.forEach((sm, idx) => {
+          const y  = 52 + idx * 20;
+          const isConfirmed = sm.state === "LITTERING_CONFIRMED";
+          const col = isConfirmed ? "rgba(239,68,68,0.92)" : "rgba(234,179,8,0.85)";
+          const label = `P#${sm.person_id} W#${sm.waste_id}: ${sm.state}`;
+          const tw2 = ctx.measureText(label).width + 10;
+          ctx.fillStyle = col;
+          ctx.fillRect(8, y - 13, tw2, 16);
+          ctx.fillStyle = isConfirmed ? "#fff" : "#000";
+          ctx.fillText(label, 13, y);
 
-      // State machine status overlay
-      if (smState && smState !== "NORMAL" && smState !== "") {
-        const isConfirmed = smState === "LITTERING_CONFIRMED";
-        ctx.font = "bold 13px monospace";
-        const stateText = isConfirmed ? `⚠ ${smState}` : smState;
-        const tw = ctx.measureText(stateText).width + 12;
-        ctx.fillStyle = isConfirmed ? "rgba(239,68,68,0.9)" : "rgba(234,179,8,0.85)";
-        ctx.fillRect(8, H - 32, tw, 22);
-        ctx.fillStyle = "#000";
-        ctx.fillText(stateText, 14, H - 16);
+          // Dwell bar (if active)
+          if (sm.dwell_progress > 0) {
+            const barW = Math.round((W - 20) * sm.dwell_progress);
+            ctx.fillStyle = "rgba(255,140,0,0.75)";
+            ctx.fillRect(8, y + 4, barW, 4);
+          }
+        });
       }
 
       // Timestamp
@@ -184,9 +156,9 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
 
     animId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animId);
-  }, [bboxes, running, cameraOffline, smState, dwellProgress, cameraId]); // eslint-disable-line
+  }, [bboxes, running, cameraOffline, activeMachines, cameraId]);
 
-  // ── CAMERA OFFLINE state ──────────────────────────────────────────────────
+  // ── CAMERA OFFLINE ────────────────────────────────────────────────────────
   if (cameraOffline && running) {
     return (
       <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 border-red-500/40 flex flex-col items-center justify-center gap-3">
@@ -194,6 +166,7 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
           <p className="text-2xl font-mono font-bold text-red-400">CAMERA OFFLINE</p>
           <p className="text-sm text-red-400/60 mt-1 font-mono">{cameraId}</p>
           <p className="text-xs text-slate-500 mt-3">
+            MJPEG stream not available<br />
             Check CAMERA_SOURCE in backend/.env<br />
             and restart vision_engine.py
           </p>
@@ -204,15 +177,19 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
 
   return (
     <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 border-eco-500/40">
-      {/* Real webcam video */}
-      <video
-        ref={videoRef}
-        autoPlay muted playsInline
-        className="absolute inset-0 w-full h-full object-cover"
-      />
 
-      {/* Offline overlay (camera not started) */}
-      {!running && (
+      {/* A9: MJPEG stream as a plain <img> — no getUserMedia conflict */}
+      {running ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          ref={imgRef}
+          src={streamUrl}
+          alt="EcoWatch live stream"
+          className="absolute inset-0 w-full h-full object-cover"
+          onLoad={() => { setStreamOk(true); setStreamError(false); }}
+          onError={() => { setStreamError(true); setStreamOk(false); }}
+        />
+      ) : (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60">
           <div className="text-center">
             <p className="text-slate-500 font-mono text-sm">INFERENCE STOPPED</p>
@@ -221,25 +198,29 @@ export function CameraFeed({ bboxes, running, cameraOffline, cameraId, smState, 
         </div>
       )}
 
-      {/* Canvas overlay — bboxes from vision_engine WebSocket */}
+      {/* Canvas overlay — bboxes + SM state from WS */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
         style={{ pointerEvents: "none" }}
       />
 
-      {/* REC indicator */}
-      {running && camActiveRef.current && (
-        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-600/80 backdrop-blur-sm">
-          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-          <span className="text-white text-[10px] font-bold">REC</span>
+      {/* Stream error banner (MJPEG server not running) */}
+      {running && streamError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+          <div className="text-center space-y-1">
+            <p className="text-red-400 font-mono text-sm">STREAM UNAVAILABLE</p>
+            <p className="text-slate-500 text-xs font-mono">{streamUrl}</p>
+            <p className="text-slate-600 text-xs">Is vision_engine.py running?</p>
+          </div>
         </div>
       )}
 
-      {/* Camera error (browser denied / no device) */}
-      {camErrorRef.current && running && (
-        <div className="absolute bottom-0 left-0 right-0 p-2 bg-red-900/90 text-red-300 text-[10px] text-center font-mono">
-          CAMERA ERROR: {camErrorRef.current}
+      {/* REC indicator — shown when stream is live */}
+      {running && streamOk && (
+        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-600/80 backdrop-blur-sm">
+          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          <span className="text-white text-[10px] font-bold">REC · MJPEG</span>
         </div>
       )}
     </div>

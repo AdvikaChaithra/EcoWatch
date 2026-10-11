@@ -1,19 +1,18 @@
 """
-EcoWatch — All Pydantic Models
-Shared across all routers to avoid circular imports.
+EcoWatch — All Pydantic Models (v4)
 """
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, EmailStr
 
 
-# ─── Auth / Registration ──────────────────────────────────────
+# ─── Auth / Registration ──────────────────────────────────────────────────────
 
 class FaceRegisterRequest(BaseModel):
     citizen_id: str
-    frames: List[str]          # list of base64-encoded JPEG frames
+    frames: List[str]
 
 class FaceLoginRequest(BaseModel):
-    frame: str                 # single base64-encoded JPEG frame
+    frame: str
 
 class WorkerLoginRequest(BaseModel):
     employee_id: str
@@ -32,16 +31,17 @@ class OTPVerify(BaseModel):
     otp: str
 
 
-# ─── Violations ───────────────────────────────────────────────
+# ─── Violations ───────────────────────────────────────────────────────────────
 
 class ViolationCreate(BaseModel):
     citizen_id: Optional[str] = None
     location_name: str
     lat: float
     lng: float
-    snapshot_b64: Optional[str] = None   # base64 JPEG from vision engine
+    # No snapshot_b64 — evidence is stored on disk, served via /evidence/{event_id}
+    evidence_dir: Optional[str] = None
     confidence_score: float = 0.0
-    person_bbox: Optional[List[float]] = None  # [x1,y1,x2,y2] normalized 0-1
+    person_bbox: Optional[List[float]] = None
     trash_bbox:  Optional[List[float]] = None
 
 class ViolationUpdate(BaseModel):
@@ -51,11 +51,11 @@ class ViolationUpdate(BaseModel):
 
 class PaymentRequest(BaseModel):
     violation_id: str
-    payment_method: str      # "UPI" | "NetBanking" | "DebitCard"
+    payment_method: str
     transaction_ref: Optional[str] = None
 
 
-# ─── Reports ──────────────────────────────────────────────────
+# ─── Reports ──────────────────────────────────────────────────────────────────
 
 class ReportCreate(BaseModel):
     citizen_id: str
@@ -64,7 +64,7 @@ class ReportCreate(BaseModel):
     location_name: str
     lat: float
     lng: float
-    reported_image_b64: Optional[str] = None   # base64 JPEG
+    reported_image_b64: Optional[str] = None
 
 class ReportStatusUpdate(BaseModel):
     status: str
@@ -73,7 +73,7 @@ class AssignWorker(BaseModel):
     worker_id: str
 
 
-# ─── Workers ──────────────────────────────────────────────────
+# ─── Workers ──────────────────────────────────────────────────────────────────
 
 class WorkerCreate(BaseModel):
     admin_id: str
@@ -84,7 +84,7 @@ class WorkerCreate(BaseModel):
     ward: Optional[str] = None
 
 class WorkerStatusUpdate(BaseModel):
-    status: str                # "On Duty" | "Off Duty"
+    status: str
 
 class WorkerLocationUpdate(BaseModel):
     lat: float
@@ -95,25 +95,25 @@ class BonusUpdate(BaseModel):
     amount: float
 
 
-# ─── SMS ─────────────────────────────────────────────────────
+# ─── SMS ──────────────────────────────────────────────────────────────────────
 
 class SMSWebhook(BaseModel):
     phone: str
     message: str
 
 
-# ─── Vision Engine — Part 1 ──────────────────────────────────
+# ─── Vision Engine — Part 1 ───────────────────────────────────────────────────
 
 class VisionStatus(BaseModel):
     """Boot stage event from vision_engine.py → POST /api/vision/status."""
-    stage:     str            # STARTING | CAMERA_READY | YOLO_READY | SYSTEM_READY | CAMERA_ERROR | YOLO_ERROR
+    stage:     str
     message:   str
     error:     bool = False
     camera_id: Optional[str] = None
 
 
 class NodeHealth(BaseModel):
-    """Real telemetry from TelemetryCollector → POST /api/vision/telemetry."""
+    """Real telemetry from TelemetryCollector (psutil) → POST /api/vision/telemetry."""
     type:                 str = "node_health"
     camera_id:            Optional[str] = None
     camera_status:        Optional[str] = None
@@ -128,18 +128,32 @@ class NodeHealth(BaseModel):
     queue_size:           int   = 0
 
 
+class ConfidenceBreakdown(BaseModel):
+    association:  float = 0.0
+    separation:   float = 0.0
+    stationary:   float = 0.0
+    departure:    float = 0.0
+    dwell_seconds: float = 0.0
+
+
 class LitteringEventPayload(BaseModel):
-    """Part 1 confirmed littering event → POST /api/littering_event."""
+    """
+    Part 1 confirmed littering event → POST /api/littering_event.
+    No snapshot_b64 — evidence is saved to disk by EvidenceWriter and served
+    via GET /evidence/{event_id[:8]}/{filename}.
+    """
     type:              str = "littering_event"
     event_id:          str
     camera_id:         str
-    timestamp:         str
-    location:          dict              # {name, latitude, longitude, ward}
+    timestamp:         str                          # ISO-8601 UTC
+    location:          Dict[str, Any]               # {name, latitude, longitude, ward}
     person_track_id:   int
     waste_track_id:    int
-    person_bbox:       List[float]       # [x1,y1,x2,y2] pixel coords
+    person_bbox:       List[float]                  # [x1,y1,x2,y2] pixel coords
     waste_bbox:        List[float]
     event_confidence:  float
-    identity_status:   str = "PENDING"  # Always PENDING in Part 1
-    confidence_breakdown: Optional[dict] = None
-    snapshot_b64:      Optional[str] = None
+    action_label:      str = "DROP"                 # DROP | PICKUP | PASS_BY | PLACE_IN_BIN
+    identity_status:   str = "PENDING"
+    confidence_breakdown: Optional[ConfidenceBreakdown] = None
+    evidence_dir:      Optional[str] = None         # relative path, served via /evidence/
+    # snapshot_b64 intentionally removed — never relay images over WebSocket (A9)

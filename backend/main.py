@@ -1,27 +1,28 @@
 """
-EcoWatch FastAPI — main.py  (v4)
-All domain logic lives in routers/. This file:
-  - Creates the app with explicit CORS origins from env (A10)
-  - Mounts routers
-  - WebSocket /ws and /ws/alerts
-  - Vision engine endpoints: /api/vision/* + /api/littering_event (ENGINE_API_KEY protected, A10)
-  - /api/camera/config
-  - /api/civic-index
-  - /api/sms/dispatch (requires SMS_API_KEY header, A10)
-  - /health (once, no duplicate)
-
-All duplicated endpoints from v3 have been removed (A10).
+EcoWatch FastAPI — main.py  (v5)
+  - Static /evidence/ route: serves evidence frames + event.json written by EvidenceWriter (item 2)
+  - /api/vision/pipeline_state endpoint (A9)
+  - All ENGINE_API_KEY + SMS_API_KEY guards (A10)
+  - Explicit CORS from ALLOWED_ORIGINS env var (A10)
+  - No duplicate routes
 """
+from pathlib import Path
 import os
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.database import get_supabase, get_ws_manager
 from backend.models import VisionStatus, NodeHealth, LitteringEventPayload
 from backend.routers import auth, violations, reports, workers
 
-app = FastAPI(title="EcoWatch API", version="4.0.0", docs_url="/api/docs")
+app = FastAPI(title="EcoWatch API", version="5.0.0", docs_url="/api/docs")
+
+# Serve evidence frames + event.json written by EvidenceWriter (item 2)
+_EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "evidence_snapshots"))
+_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/evidence", StaticFiles(directory=str(_EVIDENCE_DIR)), name="evidence")
 
 # A10: explicit CORS origins — never "*" in production
 _raw_origins = os.getenv(

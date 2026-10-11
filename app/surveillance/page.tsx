@@ -1,13 +1,17 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Activity, AlertTriangle, Wifi, WifiOff, Play, Square, RefreshCw, MapPin, Clock } from "lucide-react";
+import { Activity, AlertTriangle, Wifi, WifiOff, Play, Square, RefreshCw, MapPin, Clock, ExternalLink } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { CameraFeed } from "@/components/surveillance/CameraFeed";
 import { BiometricPanel } from "@/components/surveillance/BiometricPanel";
 import { PenaltyTerminal, LogEntry } from "@/components/surveillance/PenaltyTerminal";
 import { cn } from "@/lib/utils";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/alerts";
+const WS_URL    = process.env.NEXT_PUBLIC_WS_URL    ?? "ws://localhost:8000/ws/alerts";
+const BACKEND   = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const EVIDENCE  = `${BACKEND}/evidence`;   // served via StaticFiles mount
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface BBox {
   type: "person" | "trash";
@@ -15,6 +19,13 @@ interface BBox {
   confidence: number;
   label?: string;
   trackId?: number;
+}
+
+interface ActiveMachine {
+  person_id:      number;
+  waste_id:       number;
+  state:          string;
+  dwell_progress: number;
 }
 
 interface NodeHealth {
@@ -40,17 +51,20 @@ interface LitterEvent {
   person_bbox:      number[];
   waste_bbox:       number[];
   event_confidence: number;
-  identity_status:  string;   // always "PENDING" in Part 1
+  action_label:     string;          // DROP | PICKUP | PASS_BY | PLACE_IN_BIN
+  identity_status:  string;          // always "PENDING" in Part 1
   confidence_breakdown?: {
     association: number; separation: number; stationary: number;
     departure: number; dwell_seconds: number;
   };
+  evidence_dir?: string;             // item 2: short event_id prefix
 }
 
 interface CameraConfig {
   camera_id: string; camera_name: string;
   latitude: string; longitude: string;
   location_name: string; ward: string;
+  mjpeg_url?: string;                // A9: from /api/camera/config
 }
 
 type BootStage =
@@ -59,15 +73,15 @@ type BootStage =
   | "CAMERA_ERROR" | "YOLO_ERROR";
 
 const STAGE_COLOR: Record<string, string> = {
-  OFFLINE:           "text-slate-500",
-  STARTING:          "text-yellow-400",
-  YOLO_READY:        "text-blue-400",
-  CAMERA_READY:      "text-blue-400",
-  TRACKER_READY:     "text-blue-400",
-  EVENT_ENGINE_READY:"text-blue-400",
-  SYSTEM_READY:      "text-eco-400",
-  CAMERA_ERROR:      "text-red-400",
-  YOLO_ERROR:        "text-red-400",
+  OFFLINE:            "text-slate-500",
+  STARTING:           "text-yellow-400",
+  YOLO_READY:         "text-blue-400",
+  CAMERA_READY:       "text-blue-400",
+  TRACKER_READY:      "text-blue-400",
+  EVENT_ENGINE_READY: "text-blue-400",
+  SYSTEM_READY:       "text-eco-400",
+  CAMERA_ERROR:       "text-red-400",
+  YOLO_ERROR:         "text-red-400",
 };
 
 const ZERO_HEALTH: NodeHealth = {
@@ -76,19 +90,20 @@ const ZERO_HEALTH: NodeHealth = {
   dropped_frames: 0, queue_size: 0,
 };
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function SurveillanceDashboard() {
-  const [running,      setRunning]      = useState(false);
-  const [wsStatus,     setWsStatus]     = useState<"connected"|"disconnected"|"connecting">("disconnected");
-  const [bootStage,    setBootStage]    = useState<BootStage>("OFFLINE");
-  const [bboxes,       setBboxes]       = useState<BBox[]>([]);
-  const [smState,      setSmState]      = useState<string>("");
-  const [dwellProgress,setDwellProg]    = useState<number>(0);
-  const [health,       setHealth]       = useState<NodeHealth>(ZERO_HEALTH);
-  const [logs,         setLogs]         = useState<LogEntry[]>([]);
-  const [litterEvents, setLitterEvents] = useState<LitterEvent[]>([]);
-  const [latestEvent,  setLatestEvent]  = useState<LitterEvent | null>(null);
-  const [snapshotUrl,  setSnapshotUrl]  = useState<string | null>(null);
-  const [camConfig,    setCamConfig]    = useState<CameraConfig | null>(null);
+  const [running,       setRunning]       = useState(false);
+  const [wsStatus,      setWsStatus]      = useState<"connected"|"disconnected"|"connecting">("disconnected");
+  const [bootStage,     setBootStage]     = useState<BootStage>("OFFLINE");
+  const [bboxes,        setBboxes]        = useState<BBox[]>([]);
+  // A9: active state machines from pipeline_state
+  const [activeMachines, setActiveMachines] = useState<ActiveMachine[]>([]);
+  const [health,        setHealth]        = useState<NodeHealth>(ZERO_HEALTH);
+  const [logs,          setLogs]          = useState<LogEntry[]>([]);
+  const [litterEvents,  setLitterEvents]  = useState<LitterEvent[]>([]);
+  const [latestEvent,   setLatestEvent]   = useState<LitterEvent | null>(null);
+  const [camConfig,     setCamConfig]     = useState<CameraConfig | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const addLiveAlert = useEcoStore((s) => s.addLiveAlert);
@@ -98,11 +113,11 @@ export default function SurveillanceDashboard() {
     setLogs((prev) => [...prev.slice(-80), { msg, type, ts }]);
   }, []);
 
-  // Fetch camera config on mount
+  // Fetch camera config (includes mjpeg_url) on mount
   useEffect(() => {
-    fetch("http://localhost:8000/api/camera/config")
+    fetch(`${BACKEND}/api/camera/config`)
       .then((r) => r.json())
-      .then((d) => setCamConfig(d))
+      .then((d: CameraConfig) => setCamConfig(d))
       .catch(() => {});
   }, []);
 
@@ -115,8 +130,7 @@ export default function SurveillanceDashboard() {
       setBootStage("OFFLINE");
       setBboxes([]);
       setHealth(ZERO_HEALTH);
-      setSmState("");
-      setDwellProg(0);
+      setActiveMachines([]);
       return;
     }
 
@@ -128,7 +142,7 @@ export default function SurveillanceDashboard() {
 
     ws.onopen = () => {
       setWsStatus("connected");
-      addLog(`WebSocket connected → ${WS_URL}`, "sys");
+      addLog(`WS connected → ${WS_URL}`, "sys");
       ws.send(JSON.stringify({ type: "ping" }));
     };
 
@@ -136,16 +150,14 @@ export default function SurveillanceDashboard() {
       try {
         const msg = JSON.parse(evt.data);
 
-        // ── Real boot status from vision_engine.py ─────────────────────
+        // ── Boot status from vision_engine.py ────────────────────────────
         if (msg.type === "boot_status") {
-          const stage = msg.stage as BootStage;
-          setBootStage(stage);
-          const logType: LogEntry["type"] = msg.error ? "error" : "info";
-          addLog(`[${msg.stage}] ${msg.message}`, logType);
+          setBootStage(msg.stage as BootStage);
+          addLog(`[${msg.stage}] ${msg.message}`, msg.error ? "error" : "info");
           return;
         }
 
-        // ── Real telemetry from TelemetryCollector (psutil) ────────────
+        // ── Real telemetry (psutil) ───────────────────────────────────────
         if (msg.type === "node_health") {
           setHealth({
             camera_fps:           msg.camera_fps           ?? 0,
@@ -159,21 +171,21 @@ export default function SurveillanceDashboard() {
             camera_status:        msg.camera_status,
             camera_resolution:    msg.camera_resolution,
           });
-          // If camera error comes through telemetry, show it
-          if (msg.camera_status === "CAMERA_ERROR") {
-            setBootStage("CAMERA_ERROR");
-          }
+          if (msg.camera_status === "CAMERA_ERROR") setBootStage("CAMERA_ERROR");
           return;
         }
 
-        // ── Part 1: Confirmed littering event (identity PENDING) ───────
+        // ── A9: Pipeline state (5 Hz, no images) ─────────────────────────
+        if (msg.type === "pipeline_state") {
+          setActiveMachines(msg.active_machines ?? []);
+          return;
+        }
+
+        // ── Part 1 confirmed littering event ─────────────────────────────
         if (msg.type === "littering_event") {
           const ev = msg as LitterEvent;
           setLatestEvent(ev);
 
-          // Convert pixel bboxes to 0-1 normalized for CameraFeed
-          // (vision_engine sends pixel coords; we need to normalize for canvas)
-          // We pass them raw and let CameraFeed normalize based on video dims
           const newBboxes: BBox[] = [
             {
               type: "person", confidence: ev.event_confidence * 100,
@@ -189,7 +201,6 @@ export default function SurveillanceDashboard() {
             },
           ];
           setBboxes(newBboxes);
-          setSmState("LITTERING_CONFIRMED");
 
           setLitterEvents((prev) => [ev, ...prev.slice(0, 19)]);
 
@@ -206,7 +217,10 @@ export default function SurveillanceDashboard() {
               "info",
             );
           }
-          addLog(`Person#${ev.person_track_id} Waste#${ev.waste_track_id} | identity: PENDING (Part 2)`, "match");
+          addLog(
+            `  action=${ev.action_label} | P#${ev.person_track_id} W#${ev.waste_track_id} | identity: PENDING`,
+            "match",
+          );
 
           addLiveAlert({
             id: ev.event_id, type: "violation",
@@ -214,37 +228,30 @@ export default function SurveillanceDashboard() {
             timestamp: ev.timestamp,
           });
 
-          // Clear bboxes after 10s
-          setTimeout(() => { setBboxes([]); setSmState(""); setDwellProg(0); }, 10000);
+          // Clear event bbox overlay after 12s (but keep activeMachines from pipeline_state)
+          setTimeout(() => { setBboxes([]); }, 12000);
           return;
         }
 
-        // ── Littering snapshot (evidence frame from real camera) ───────
-        if (msg.type === "littering_snapshot") {
-          setSnapshotUrl(msg.snapshot_b64 ?? null);
-          setTimeout(() => setSnapshotUrl(null), 30000);
-          return;
-        }
-
-        // ── Pong ──────────────────────────────────────────────────────
+        // ── Pong ─────────────────────────────────────────────────────────
         if (msg.type === "pong") {
           addLog(`Backend ACK — ${msg.connections ?? 1} WS connection(s)`, "sys");
           return;
         }
 
-        // ── Legacy violation format (kept for backward compat) ────────
+        // ── Legacy violation format (backward compat) ─────────────────────
         if (msg.type === "violation") {
-          const newBboxes: BBox[] = [];
+          const bboxList: BBox[] = [];
           if (msg.person_bbox) {
-            const [x1, y1, x2, y2] = msg.person_bbox;
-            newBboxes.push({ type: "person", x1, y1, x2, y2, confidence: 94, label: "Person" });
+            const [x1,y1,x2,y2] = msg.person_bbox;
+            bboxList.push({ type: "person", x1, y1, x2, y2, confidence: 94, label: "Person" });
           }
           if (msg.trash_bbox) {
-            const [x1, y1, x2, y2] = msg.trash_bbox;
-            newBboxes.push({ type: "trash", x1, y1, x2, y2, confidence: msg.confidence_score ?? 87, label: "Waste" });
+            const [x1,y1,x2,y2] = msg.trash_bbox;
+            bboxList.push({ type: "trash", x1, y1, x2, y2, confidence: msg.confidence_score ?? 87, label: "Waste" });
           }
-          setBboxes(newBboxes);
-          addLog(`🚨 LITTER DETECTED at ${msg.location} — ${msg.confidence_score?.toFixed(1)}%`, "alert");
+          setBboxes(bboxList);
+          addLog(`🚨 LITTER at ${msg.location} — ${msg.confidence_score?.toFixed(1)}%`, "alert");
           setTimeout(() => { setBboxes([]); }, 8000);
           return;
         }
@@ -254,7 +261,7 @@ export default function SurveillanceDashboard() {
       }
     };
 
-    ws.onclose  = () => { setWsStatus("disconnected"); addLog("WebSocket disconnected", "sys"); };
+    ws.onclose  = () => { setWsStatus("disconnected"); addLog("WS disconnected", "sys"); };
     ws.onerror  = () => addLog("WS error — is FastAPI running on :8000?", "error");
 
     return () => { ws.close(); };
@@ -270,7 +277,7 @@ export default function SurveillanceDashboard() {
         <div>
           <h1 className="font-display text-3xl font-bold text-slate-100">AI Camera Surveillance</h1>
           <p className="text-slate-400 text-sm mt-1">
-            YOLOv8n · ByteTrack · LitteringStateMachine · 2s Floor Dwell Detection
+            YOLOv8n · ByteTrack · LitteringStateMachine v3 · MJPEG Stream
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -310,7 +317,7 @@ export default function SurveillanceDashboard() {
         </div>
       </div>
 
-      {/* Camera info bar (real config from API) */}
+      {/* Camera info bar */}
       {camConfig && (
         <div className="flex flex-wrap items-center gap-4 px-4 py-2.5 rounded-xl bg-civic-900/60 border border-white/8 text-xs text-slate-400">
           <span className="font-mono text-eco-400 font-semibold">{camConfig.camera_id}</span>
@@ -322,6 +329,10 @@ export default function SurveillanceDashboard() {
           )}
           {camConfig.ward && <span>{camConfig.ward}</span>}
           {health.camera_resolution && <span className="font-mono">{health.camera_resolution}</span>}
+          {/* A9: show MJPEG URL */}
+          {camConfig.mjpeg_url && (
+            <span className="text-slate-600 font-mono ml-auto">{camConfig.mjpeg_url}</span>
+          )}
         </div>
       )}
 
@@ -337,31 +348,56 @@ export default function SurveillanceDashboard() {
               </p>
               {running && wsStatus === "connected" && (
                 <span className="text-[10px] text-eco-400 font-mono">
-                  {health.camera_fps.toFixed(1)}fps · LIVE
+                  {health.camera_fps.toFixed(1)}fps · MJPEG
                 </span>
               )}
             </div>
+            {/* A9: pass mjpegUrl + activeMachines; remove old props */}
             <CameraFeed
               bboxes={running ? bboxes : []}
               running={running}
               cameraOffline={health.camera_status === "CAMERA_ERROR" || bootStage === "CAMERA_ERROR"}
               cameraId={camConfig?.camera_id ?? "CAM_01"}
-              smState={running ? smState : ""}
-              dwellProgress={running ? dwellProgress : 0}
+              mjpegUrl={camConfig?.mjpeg_url}
+              activeMachines={running ? activeMachines : []}
             />
           </div>
 
-          {/* Evidence Snapshot (real camera frame from confirmed event) */}
-          {snapshotUrl && (
+          {/* Evidence viewer: shows disk-saved key frames via /evidence/ route (item 2) */}
+          {latestEvent?.evidence_dir && (
             <div className="space-y-1">
-              <p className="text-[10px] font-mono text-red-400">📸 EVIDENCE SNAPSHOT — Real Camera Frame</p>
-              <div className="relative rounded-xl overflow-hidden border-2 border-red-500/40">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={snapshotUrl} alt="Evidence" className="w-full object-contain" />
-                <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-red-900/90 text-red-300 text-[10px] font-mono">
-                  LITTERING CONFIRMED · IDENTITY: PENDING
-                </div>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-mono text-red-400">
+                  📸 EVIDENCE — {latestEvent.evidence_dir} · {latestEvent.action_label}
+                </p>
+                <a
+                  href={`${EVIDENCE}/${latestEvent.evidence_dir}/event.json`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[9px] text-slate-500 hover:text-slate-300"
+                >
+                  event.json <ExternalLink className="w-2.5 h-2.5" />
+                </a>
               </div>
+              <div className="grid grid-cols-3 gap-2">
+                {["1_assoc", "2_drop", "3_confirmed"].map((label) => (
+                  <div key={label} className="relative rounded-lg overflow-hidden border border-white/10 bg-black">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`${EVIDENCE}/${latestEvent.evidence_dir}/${label}.jpg`}
+                      alt={label}
+                      className="w-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <span className="absolute bottom-0 left-0 right-0 text-center text-[8px] font-mono py-0.5 bg-black/70 text-slate-400">
+                      {label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[9px] text-slate-600 text-center">
+                identity: {latestEvent.identity_status} · conf: {(latestEvent.event_confidence*100).toFixed(1)}%
+              </p>
             </div>
           )}
         </div>
@@ -376,7 +412,7 @@ export default function SurveillanceDashboard() {
             pendingEvent={running ? latestEvent : null}
           />
 
-          {/* Real Node Health */}
+          {/* Node Health */}
           <div className="glass-card p-4 space-y-3">
             <p className="text-xs text-slate-400 flex items-center gap-1.5">
               <Activity className="w-3.5 h-3.5 text-blue-400" /> Node Health
@@ -384,12 +420,12 @@ export default function SurveillanceDashboard() {
             </p>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { label: "Cam FPS",   value: running && wsStatus === "connected" ? `${health.camera_fps.toFixed(1)}` : "—",  color: "text-eco-400"    },
-                { label: "AI FPS",    value: running && wsStatus === "connected" ? `${health.inference_fps.toFixed(1)}` : "—", color: "text-blue-400"   },
-                { label: "Latency",   value: running && wsStatus === "connected" ? `${health.inference_latency_ms}ms` : "—",  color: "text-orange-400" },
-                { label: "CPU",       value: running && wsStatus === "connected" ? `${health.cpu_percent.toFixed(1)}%` : "—", color: "text-yellow-400"  },
-                { label: "RAM",       value: running && wsStatus === "connected" ? `${health.ram_mb}MB` : "—",                color: "text-purple-400"  },
-                { label: "Drops",     value: running && wsStatus === "connected" ? `${health.dropped_frames}` : "—",          color: "text-slate-400"  },
+                { label: "Cam FPS",  value: running && wsStatus === "connected" ? `${health.camera_fps.toFixed(1)}`           : "—", color: "text-eco-400"    },
+                { label: "AI FPS",   value: running && wsStatus === "connected" ? `${health.inference_fps.toFixed(1)}`         : "—", color: "text-blue-400"   },
+                { label: "Latency",  value: running && wsStatus === "connected" ? `${health.inference_latency_ms}ms`           : "—", color: "text-orange-400" },
+                { label: "CPU",      value: running && wsStatus === "connected" ? `${health.cpu_percent.toFixed(1)}%`          : "—", color: "text-yellow-400" },
+                { label: "RAM",      value: running && wsStatus === "connected" ? `${health.ram_mb}MB`                         : "—", color: "text-purple-400" },
+                { label: "Drops",    value: running && wsStatus === "connected" ? `${health.dropped_frames}`                   : "—", color: "text-slate-400"  },
               ].map(({ label, value, color }) => (
                 <div key={label} className="bg-civic-900/60 rounded-xl p-3 text-center">
                   <p className="text-[10px] text-slate-400">{label}</p>
@@ -397,18 +433,44 @@ export default function SurveillanceDashboard() {
                 </div>
               ))}
             </div>
-            <p className="text-[10px] text-slate-500 text-center">
-              GPU: {running ? health.gpu : "—"}
-            </p>
+            <p className="text-[10px] text-slate-500 text-center">GPU: {running ? health.gpu : "—"}</p>
           </div>
 
-          {/* Part 1 Littering Events List */}
+          {/* Pipeline state machines (A9) */}
+          {running && activeMachines.length > 0 && (
+            <div className="glass-card p-3 space-y-2">
+              <p className="text-[10px] font-mono text-slate-400">Active State Machines ({activeMachines.length})</p>
+              {activeMachines.map((sm) => (
+                <div key={`${sm.person_id}-${sm.waste_id}`}
+                     className="flex items-center gap-2 text-[10px] font-mono">
+                  <span className="text-slate-500">P#{sm.person_id} W#{sm.waste_id}</span>
+                  <span className={cn(
+                    "px-1.5 py-0.5 rounded text-[9px]",
+                    sm.state === "LITTERING_CONFIRMED" ? "bg-red-500/20 text-red-400"
+                    : sm.state === "OBJECT_STATIONARY" ? "bg-orange-500/20 text-orange-400"
+                    : "bg-slate-500/10 text-slate-400",
+                  )}>{sm.state}</span>
+                  {sm.dwell_progress > 0 && (
+                    <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-orange-400 transition-all"
+                        style={{ width: `${sm.dwell_progress * 100}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Littering Events List */}
           <div className="glass-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs text-slate-400 flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Detections
               </p>
-              <button onClick={() => setLitterEvents([])} className="p-1 rounded-md hover:bg-white/5 text-slate-500">
+              <button onClick={() => setLitterEvents([])}
+                      className="p-1 rounded-md hover:bg-white/5 text-slate-500">
                 <RefreshCw className="w-3 h-3" />
               </button>
             </div>
@@ -424,9 +486,14 @@ export default function SurveillanceDashboard() {
                       <p className="text-[10px] font-mono text-slate-300">
                         P#{ev.person_track_id} · W#{ev.waste_track_id}
                       </p>
-                      <span className="badge text-[9px] bg-red-500/10 text-red-400 border-red-500/20">
-                        {(ev.event_confidence * 100).toFixed(0)}%
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="badge text-[9px] bg-blue-500/10 text-blue-400 border-blue-500/20">
+                          {ev.action_label}
+                        </span>
+                        <span className="badge text-[9px] bg-red-500/10 text-red-400 border-red-500/20">
+                          {(ev.event_confidence * 100).toFixed(0)}%
+                        </span>
+                      </div>
                     </div>
                     <p className="text-[10px] text-slate-500 truncate mt-0.5">{ev.location.name}</p>
                     <div className="flex items-center gap-1 mt-0.5">
