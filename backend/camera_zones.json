@@ -1,0 +1,11 @@
+{
+  "cameras": [
+    {
+      "camera_id": "CAM_01",
+      "camera_name": "EcoWatch Test Camera",
+      "bin_zones": [],
+      "no_litter_zones": []
+    }
+  ],
+  "schema_note": "All polygon coordinates are normalized 0.0–1.0 (x, y). Use draw_zones.py to create polygons interactively over a real camera frame."
+}

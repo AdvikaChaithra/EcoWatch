@@ -1,17 +1,25 @@
-fastapi
-uvicorn[standard]
-websockets
-supabase
-python-dotenv
-numpy
-Pillow
-opencv-python
-ultralytics
-insightface
-onnxruntime
-httpx
-python-multipart
-pydantic
-aiofiles
-pyotp
-psutil
+# EcoWatch Python Backend — requirements.txt (v4, pinned)
+# Install: pip install -r backend/requirements.txt
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+supabase==2.10.0
+pydantic==2.10.1
+httpx==0.27.2
+aiofiles==24.1.0
+pyotp==2.9.0
+psutil==6.1.0
+
+# Computer vision (A6: install separately if using GPU build)
+# CPU:    pip install opencv-python==4.10.0.84
+# Headless server: pip install opencv-python-headless==4.10.0.84
+opencv-python==4.10.0.84
+
+# YOLOv8 + ByteTrack (auto-downloads bytetrack.yaml)
+ultralytics==8.3.34
+
+# Heavy ML deps — install GPU build from pytorch.org if CUDA available
+# CPU fallback:
+# torch>=2.2.0,<2.5
+# torchvision>=0.17.0,<0.20
