@@ -1,7 +1,8 @@
 -- ============================================================================
 -- EcoWatch migration 001 — demo MVP (identity -> violation -> citizen alert, sectors)
 -- ADDITIVE and idempotent: safe to run more than once. Does NOT drop any data.
--- Run in Supabase -> SQL Editor (after schema.sql has been applied).
+-- Written for a database whose ids are UUIDs (admins.id, citizens.id, workers.id, ... are uuid).
+-- Run in Supabase -> SQL Editor.
 -- ============================================================================
 
 -- ── 1. Violations: identity + evidence + review fields ──────────────────────
@@ -15,6 +16,7 @@ ALTER TABLE violations ADD COLUMN IF NOT EXISTS sector_id       TEXT;
 ALTER TABLE violations ADD COLUMN IF NOT EXISTS reviewed_by     TEXT;
 ALTER TABLE violations ADD COLUMN IF NOT EXISTS reviewed_at     TIMESTAMPTZ;
 ALTER TABLE violations ADD COLUMN IF NOT EXISTS admin_reason    TEXT;
+ALTER TABLE violations ADD COLUMN IF NOT EXISTS points_discount NUMERIC(10,2) NOT NULL DEFAULT 0;
 
 -- One fine per littering event (idempotency enforced by the database, not just code).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_violations_event_id ON violations(event_id) WHERE event_id IS NOT NULL;
@@ -22,12 +24,12 @@ CREATE INDEX IF NOT EXISTS idx_violations_identity ON violations(identity_status
 
 -- ── 2. Notifications (per-citizen alerts) ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS notifications (
-    id           TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-    user_id      TEXT NOT NULL,                 -- citizens.id
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID NOT NULL,                 -- citizens.id
     type         TEXT NOT NULL,                 -- VIOLATION | DISPUTE | SYSTEM
     title        TEXT NOT NULL,
     message      TEXT NOT NULL,
-    violation_id TEXT,
+    violation_id UUID,
     read         BOOLEAN NOT NULL DEFAULT FALSE,
     sms_status   TEXT NOT NULL DEFAULT 'NOT_CONFIGURED',   -- NOT_CONFIGURED | SENT | FAILED
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -40,7 +42,7 @@ CREATE TABLE IF NOT EXISTS sectors (
     id        TEXT PRIMARY KEY,
     area      TEXT NOT NULL,
     name      TEXT NOT NULL,
-    admin_id  TEXT REFERENCES admins(id),
+    admin_id  UUID REFERENCES admins(id),       -- same type as admins.id (uuid)
     lat       DOUBLE PRECISION NOT NULL,        -- sector centre, used for nearest-sector routing
     lng       DOUBLE PRECISION NOT NULL
 );
@@ -51,29 +53,32 @@ ALTER TABLE dump_reports ADD COLUMN IF NOT EXISTS sector_id TEXT REFERENCES sect
 CREATE INDEX IF NOT EXISTS idx_workers_sector      ON workers(sector_id);
 CREATE INDEX IF NOT EXISTS idx_dump_reports_sector ON dump_reports(sector_id);
 
+-- Admins are looked up by their (unique) email, so this works whatever their uuid is.
 INSERT INTO sectors (id, area, name, admin_id, lat, lng) VALUES
-    ('SEC-IND-1', 'Indiranagar',  'Sector 1', 'ADM-BBMP-001', 12.9783, 77.6408),
-    ('SEC-IND-2', 'Indiranagar',  'Sector 2', 'ADM-BBMP-002', 12.9719, 77.6412),
-    ('SEC-KOR-1', 'Koramangala',  'Sector 1', 'ADM-BBMP-001', 12.9346, 77.6267),
-    ('SEC-KOR-2', 'Koramangala',  'Sector 2', 'ADM-BBMP-002', 12.9279, 77.6271)
+    ('SEC-IND-1', 'Indiranagar', 'Sector 1', (SELECT id FROM admins WHERE email = 'admin@bbmp.gov.in'),   12.9783, 77.6408),
+    ('SEC-IND-2', 'Indiranagar', 'Sector 2', (SELECT id FROM admins WHERE email = 'sunitha@bbmp.gov.in'), 12.9719, 77.6412),
+    ('SEC-KOR-1', 'Koramangala', 'Sector 1', (SELECT id FROM admins WHERE email = 'admin@bbmp.gov.in'),   12.9346, 77.6267),
+    ('SEC-KOR-2', 'Koramangala', 'Sector 2', (SELECT id FROM admins WHERE email = 'sunitha@bbmp.gov.in'), 12.9279, 77.6271)
 ON CONFLICT (id) DO NOTHING;
 
--- Put the seeded workers / reports into sectors so the admin filters have data.
-UPDATE workers SET sector_id = 'SEC-IND-1' WHERE employee_id = 'EW-WRK-001' AND sector_id IS NULL;
-UPDATE workers SET sector_id = 'SEC-IND-1' WHERE employee_id = 'EW-WRK-002' AND sector_id IS NULL;
-UPDATE workers SET sector_id = 'SEC-KOR-1' WHERE employee_id = 'EW-WRK-003' AND sector_id IS NULL;
+-- Put existing workers (that have a location, else round-robin by ward text) into sectors.
+UPDATE workers SET sector_id = 'SEC-IND-1' WHERE employee_id ILIKE 'EW-WRK-001' AND sector_id IS NULL;
+UPDATE workers SET sector_id = 'SEC-IND-1' WHERE employee_id ILIKE 'EW-WRK-002' AND sector_id IS NULL;
+UPDATE workers SET sector_id = 'SEC-KOR-1' WHERE sector_id IS NULL;
 
--- Nearest sector centre for any report that has none (haversine-free planar approximation is fine here).
+-- Route every existing dump report to the nearest sector centre.
 UPDATE dump_reports r SET sector_id = (
     SELECT s.id FROM sectors s ORDER BY (s.lat - r.lat)^2 + (s.lng - r.lng)^2 LIMIT 1
-) WHERE r.sector_id IS NULL;
+) WHERE r.sector_id IS NULL AND r.lat IS NOT NULL AND r.lng IS NOT NULL;
 
--- ── 4. Face matching: top-K candidates (thresholds/margin decided server-side) ─
-CREATE OR REPLACE FUNCTION match_face_candidates(
+-- ── 4. Face matching functions ───────────────────────────────────────────────
+-- Top-K candidates (thresholds / margin are decided server-side in backend/identity.py).
+DROP FUNCTION IF EXISTS match_face_candidates(vector, int);
+CREATE FUNCTION match_face_candidates(
     query_embedding vector(512),
     k int DEFAULT 2
 )
-RETURNS TABLE(id TEXT, name TEXT, similarity float)
+RETURNS TABLE(id UUID, name TEXT, similarity float)
 LANGUAGE sql STABLE AS $$
     SELECT c.id, c.name, 1 - (c.face_embedding <=> query_embedding) AS similarity
     FROM citizens c
@@ -83,23 +88,25 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- Duplicate-face check at enrollment (is this face already registered to someone else?)
-CREATE OR REPLACE FUNCTION find_duplicate_face(
+DROP FUNCTION IF EXISTS find_duplicate_face(vector, text, float);
+DROP FUNCTION IF EXISTS find_duplicate_face(vector, uuid, float);
+CREATE FUNCTION find_duplicate_face(
     query_embedding vector(512),
-    exclude_citizen TEXT DEFAULT '',
-    min_similarity float DEFAULT 0.6
+    exclude_citizen UUID DEFAULT NULL,
+    min_similarity  float DEFAULT 0.6
 )
-RETURNS TABLE(id TEXT, similarity float)
+RETURNS TABLE(id UUID, similarity float)
 LANGUAGE sql STABLE AS $$
     SELECT c.id, 1 - (c.face_embedding <=> query_embedding) AS similarity
     FROM citizens c
     WHERE c.face_embedding IS NOT NULL
-      AND c.id <> exclude_citizen
+      AND (exclude_citizen IS NULL OR c.id <> exclude_citizen)
       AND 1 - (c.face_embedding <=> query_embedding) >= min_similarity
     ORDER BY c.face_embedding <=> query_embedding
     LIMIT 1;
 $$;
 
--- ── 5. Citizen consent flag ─────────────────────────────────────────────────
+-- ── 5. Citizen consent flags ────────────────────────────────────────────────
 ALTER TABLE citizens ADD COLUMN IF NOT EXISTS face_enrolled   BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE citizens ADD COLUMN IF NOT EXISTS face_consent_at TIMESTAMPTZ;
 
@@ -115,6 +122,3 @@ BEGIN
         ALTER PUBLICATION supabase_realtime ADD TABLE notifications;
     END IF;
 END $$;
-
--- ── 7. Points used to reduce a fine (cap is enforced in the app) ─────────────
-ALTER TABLE violations ADD COLUMN IF NOT EXISTS points_discount NUMERIC(10,2) NOT NULL DEFAULT 0;
