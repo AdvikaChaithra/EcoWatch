@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
 
       // One face = one account: block enrolling a face that already belongs to someone else.
       const { data: dup, error: dupErr } = await supabase.rpc("find_duplicate_face", {
-        query_embedding: faceEmbedding, exclude_citizen: "", min_similarity: 0.6,
+        query_embedding: faceEmbedding, exclude_citizen: null, min_similarity: 0.6,
       });
       if (dupErr) throw dupErr;
       if (dup && dup.length > 0) return fail("This face is already registered to another account.", 409);
