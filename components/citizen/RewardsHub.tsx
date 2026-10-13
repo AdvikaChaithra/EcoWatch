@@ -1,4 +1,5 @@
 "use client";
+import { PenaltyRedeem } from "@/components/citizen/PenaltyRedeem";
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { Award, Star, ShoppingBag, Loader2, CheckCircle2, Zap, X } from "lucide-react";
@@ -100,6 +101,7 @@ export function RewardsHub() {
   return (
     <div className="space-y-6">
       <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
+      <PenaltyRedeem points={ecoPoints} onPointsChange={setEcoPoints} />
       {/* FIX 3: Voucher Redemption Modal */}
       {voucherModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">

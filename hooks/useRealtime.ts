@@ -60,6 +60,12 @@ export function useRealtime() {
             });
           }
 
+          // Backend identity result: only count real, newly created fines. No citizen details
+          // are shown globally; each citizen's own alert arrives through their dashboard.
+          if (msg.type === "identity_result" && msg.identity_status === "MATCH" && msg.violation_created) {
+            store.setTotalViolationsToday(store.totalViolationsToday + 1);
+          }
+
           if (msg.type === "report") {
             store.addLiveAlert({
               id: msg.id || crypto.randomUUID(),

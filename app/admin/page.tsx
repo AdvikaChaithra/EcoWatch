@@ -7,6 +7,7 @@ import { SLAMonitor } from "@/components/admin/SLAMonitor";
 import { DisputeTribunal } from "@/components/admin/DisputeTribunal";
 import { WorkforceManager } from "@/components/admin/WorkforceManager";
 import { AdminProfile } from "@/components/admin/AdminProfile";
+import { SectorFilter } from "@/components/admin/SectorFilter";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -33,6 +34,7 @@ export default function AdminDashboard() {
           <h1 className="font-display text-3xl font-bold text-slate-100">Municipal Admin Console</h1>
           <p className="text-slate-400 text-sm mt-0.5">Manage violations, dispatch workers, and monitor SLA compliance</p>
         </div>
+        <div className="ml-auto"><SectorFilter /></div>
       </div>
 
       {/* Tabs */}

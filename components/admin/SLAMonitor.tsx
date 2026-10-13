@@ -1,5 +1,6 @@
 "use client";
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
+import { useSectorScope } from "@/hooks/useSectorScope";
 import { useState, useEffect } from "react";
 import { Timer, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
 import { getDumpReports, verifyReport, supabase } from "@/lib/supabase";
@@ -74,7 +75,8 @@ export function SLAMonitor() {
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
 
-  useEffect(() => { loadReports(); }, []);
+  const { inScope, key: scopeKey } = useSectorScope();
+  useEffect(() => { loadReports(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadReports() {
     setLoading(true);
@@ -85,7 +87,7 @@ export function SLAMonitor() {
         .in("status", ["Worker Assigned","Cleaning in Progress","Pending Verification"])
         .order("created_at", { ascending: true });
       if (qErr) throw qErr;
-      setReports(data ?? []);
+      setReports((data ?? []).filter((r: any) => inScope(r.sector_id)));
       setError("");
     } catch (e) { setError(errMsg(e, "Could not load active tasks.")); } finally { setLoading(false); }
   }

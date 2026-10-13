@@ -19,6 +19,7 @@ Changes from v4:
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -47,6 +48,7 @@ load_dotenv()
 # ── Camera ────────────────────────────────────────────────────────────────────
 _SRC          = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(_SRC) if _SRC.isdigit() else _SRC
+CAMERA_LOOP   = os.getenv("CAMERA_LOOP", "false").lower() == "true"
 CAMERA_ID     = os.getenv("CAMERA_ID", "CAM_01")
 CAMERA_NAME   = os.getenv("CAMERA_NAME", "EcoWatch Test Camera")
 CAMERA_LAT    = float(os.getenv("CAMERA_LATITUDE",  "12.9783"))
@@ -94,6 +96,7 @@ ENGINE_API_KEY = os.getenv("ENGINE_API_KEY", "")
 MJPEG_HOST     = os.getenv("MJPEG_HOST", "0.0.0.0")
 MJPEG_PORT     = int(os.getenv("MJPEG_PORT", "8001"))
 FRAME_Q_SIZE   = 3
+FACE_CROPS_MAX = int(os.getenv("FACE_CROPS_MAX", "6"))
 PIPELINE_INTERVAL_S = 0.2  # 5 Hz
 
 
@@ -197,6 +200,11 @@ class FrameRingBuffer:
         with self._lock:
             return self._buf[-1][1] if self._buf else None
 
+    def snapshot(self) -> List[Tuple[float, bytes]]:
+        """Copy of all buffered (timestamp, jpeg) pairs, oldest first."""
+        with self._lock:
+            return list(self._buf)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MJPEG server
@@ -288,6 +296,9 @@ class CameraSource:
         cap.set(cv2.CAP_PROP_FPS, 30)
         self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._is_file = isinstance(CAMERA_SOURCE, str) and not CAMERA_SOURCE.lower().startswith(("rtsp://", "http://", "https://"))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        self._file_frame_dt = 1.0 / fps if (self._is_file and fps and fps > 1) else 0.0
         self._cap   = cap
         self.status = "CAMERA_READY"
         return True
@@ -310,6 +321,11 @@ class CameraSource:
                 time.sleep(1.0)
                 continue
             ret, frame = self._cap.read()
+            if self._is_file:
+                time.sleep(self._file_frame_dt)  # play recorded clips at real-time speed
+            if not ret and self._is_file and CAMERA_LOOP:
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # replay the demo clip
+                continue
             if not ret:
                 fails += 1
                 if fails > 30:
@@ -497,7 +513,7 @@ class VisionEngine:
         self.frame_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=FRAME_Q_SIZE)
         self.camera   = CameraSource(self.frame_q, self.telemetry)
 
-        self.ring     = FrameRingBuffer(EVIDENCE_PRE_SECONDS)
+        self.ring     = FrameRingBuffer(EVIDENCE_PRE_SECONDS, jpeg_quality=85)
         self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT)
         self.writer   = EvidenceWriter()
         self.zones    = ZoneChecker.load("backend/camera_zones.json", CAMERA_ID)
@@ -505,6 +521,9 @@ class VisionEngine:
         self.synth_tracker = SyntheticWasteTracker()
 
         self._running = False
+        # Per-person-track recent (timestamp, bbox) so the offender's head can be cropped
+        # from earlier frames at event time (no continuous face processing).
+        self._person_hist: Dict[int, Deque[Tuple[float, Tuple[int, int, int, int]]]] = {}
         self._post_fail_logged: Dict[str, float] = {}
         self._http    = httpx.Client(
             timeout=10.0,
@@ -705,6 +724,8 @@ class VisionEngine:
                 elif not DUAL_MODEL and cls in TRASH_CLASS_IDS and conf >= TRASH_CONF:
                     raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy)})
 
+        self._update_person_history(persons, now)
+
         # ── Waste detection: second model path ────────────────────────────────
         if DUAL_MODEL and self.waste_model is not None:
             w_results = self.waste_model.predict(
@@ -883,6 +904,54 @@ class VisionEngine:
                 "waste_count": len(wastes), "active_machines": active,
             }
 
+    def _update_person_history(self, persons: List[dict], now: float):
+        for p in persons:
+            h = self._person_hist.setdefault(p["id"], deque())
+            h.append((now, p["bbox"]))
+        cutoff = now - (EVIDENCE_PRE_SECONDS + 1.0)
+        for tid in list(self._person_hist):
+            h = self._person_hist[tid]
+            while h and h[0][0] < cutoff:
+                h.popleft()
+            if not h:
+                del self._person_hist[tid]
+
+    def _collect_face_crops(self, person_tid: int, max_crops: int = FACE_CROPS_MAX) -> List[str]:
+        """
+        Head/upper-body crops of the RESPONSIBLE person track taken from the pre-event ring
+        buffer (base64 JPEG). Only runs once per confirmed event. The backend performs the
+        actual face detection / quality gate / recognition.
+        """
+        hist = list(self._person_hist.get(person_tid, []))
+        frames = self.ring.snapshot()
+        if not hist or not frames:
+            return []
+        step = max(1, len(frames) // (max_crops * 2))
+        crops: List[Tuple[float, str]] = []
+        for ts, jpg in frames[::step]:
+            # nearest tracked bbox in time for this person
+            t_b, bbox = min(hist, key=lambda it: abs(it[0] - ts))
+            if abs(t_b - ts) > 0.25:
+                continue
+            arr = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+            if arr is None:
+                continue
+            fh, fw = arr.shape[:2]
+            x1, y1, x2, y2 = bbox
+            bw, bh = x2 - x1, y2 - y1
+            # head region: top ~45% of the person box, widened a little
+            cx1 = max(0, int(x1 - 0.15 * bw)); cx2 = min(fw, int(x2 + 0.15 * bw))
+            cy1 = max(0, int(y1 - 0.05 * bh)); cy2 = min(fh, int(y1 + 0.45 * bh))
+            if cx2 - cx1 < 40 or cy2 - cy1 < 40:
+                continue
+            crop = arr[cy1:cy2, cx1:cx2]
+            ok, enc = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ok:
+                # prefer larger crops (closer / better resolution)
+                crops.append((crop.shape[0] * crop.shape[1], base64.b64encode(enc.tobytes()).decode()))
+        crops.sort(key=lambda c: c[0], reverse=True)
+        return [c[1] for c in crops[:max_crops]]
+
     def _handle_event(self, ev: Optional[LitteringEvent], key: Tuple[int,int], now: float):
         if ev is None:
             return
@@ -932,7 +1001,9 @@ class VisionEngine:
                 "departure":      ev.departure_score,
                 "dwell_seconds":  ev.dwell_actual_s,
             },
-            "evidence_dir": rel_evidence,   # no base64; served via /evidence/ route
+            "evidence_dir": rel_evidence,   # served via /evidence/ route
+            # Head crops of the responsible person for the backend's identity pipeline.
+            "face_crops": self._collect_face_crops(ev.person_track_id),
         }
         threading.Thread(target=self._post_event, args=(payload,), daemon=True).start()
 

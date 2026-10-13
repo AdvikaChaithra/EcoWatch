@@ -1,0 +1,110 @@
+"""
+Unit tests for the identity decision and idempotent violation creation.
+Run from the repo root:  python -m pytest tests -q     (or: python tests/test_identity.py)
+The candidate lists / fake DB below are labelled TEST FIXTURES; no production data is simulated.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend import identity as I  # noqa: E402
+
+
+def cand(id_, sim, name="X"):
+    return {"id": id_, "name": name, "similarity": sim}
+
+
+def test_match_requires_threshold_and_margin():
+    r = I.decide([cand("A", 0.72), cand("B", 0.30)])
+    assert r.status == "MATCH" and r.citizen_id == "A"
+
+
+def test_close_runner_up_is_uncertain_not_match():
+    r = I.decide([cand("A", 0.70), cand("B", 0.66)])
+    assert r.status == "UNCERTAIN" and r.citizen_id is None   # never attach identity
+
+
+def test_between_thresholds_uncertain():
+    r = I.decide([cand("A", (I.FACE_REVIEW_THRESHOLD + I.FACE_MATCH_THRESHOLD) / 2)])
+    assert r.status == "UNCERTAIN" and r.citizen_id is None
+
+
+def test_below_review_is_no_match():
+    r = I.decide([cand("A", I.FACE_REVIEW_THRESHOLD - 0.05)])
+    assert r.status == "NO_MATCH" and r.citizen_id is None
+
+
+def test_empty_database_is_no_match():
+    assert I.decide([]).status == "NO_MATCH"
+
+
+def test_no_crops_is_no_face():
+    assert I.identify(None, []).status == "NO_FACE"
+
+
+# ── idempotency with a tiny in-memory fake of the supabase client ────────────
+class _Res:
+    def __init__(self, data): self.data = data
+
+
+class _Table:
+    def __init__(self, db, name): self.db, self.name, self._filter, self._op, self._row = db, name, None, "select", None
+    def select(self, *_a, **_k): self._op = "select"; return self
+    def eq(self, col, val): self._filter = (col, val); return self
+    def insert(self, row):
+        self._op, self._row = "insert", row; return self
+    def update(self, row): self._op, self._row = "update", row; return self
+    def execute(self):
+        rows = self.db.setdefault(self.name, [])
+        if self._op == "insert":
+            if self.name == "violations" and any(r.get("event_id") == self._row.get("event_id") for r in rows):
+                raise RuntimeError("duplicate key value violates unique constraint")
+            row = dict(self._row, id=f"id{len(rows)+1}")
+            rows.append(row)
+            return _Res([row])
+        if self._filter:
+            c, v = self._filter
+            return _Res([r for r in rows if r.get(c) == v])
+        return _Res(list(rows))
+
+
+class _FakeSB:
+    def __init__(self): self.db = {}
+    def table(self, name): return _Table(self.db, name)
+
+
+EVENT = {"event_id": "evt-1", "camera_id": "CAM_01", "timestamp": "2026-01-01T00:00:00+00:00",
+         "event_confidence": 0.8, "evidence_dir": "evt-1abc",
+         "location": {"name": "Test Location", "latitude": 12.97, "longitude": 77.64}}
+
+
+def test_same_event_creates_one_violation_and_one_notification():
+    sb = _FakeSB()
+    match = I.IdentityResult(status="MATCH", citizen_id="CIT-1", citizen_name="Test User", similarity=0.8)
+    a = I.record_event(sb, EVENT, match)
+    b = I.record_event(sb, EVENT, match)
+    assert a["created"] is True and b["created"] is False
+    assert len(sb.db["violations"]) == 1 and len(sb.db["notifications"]) == 1
+    assert sb.db["violations"][0]["fine_amount"] == I.FINE_AMOUNT
+    assert sb.db["notifications"][0]["user_id"] == "CIT-1"
+
+
+def test_unidentified_event_has_no_citizen_and_no_fine():
+    sb = _FakeSB()
+    a = I.record_event(sb, EVENT, I.IdentityResult(status="NO_MATCH", similarity=0.1))
+    v = sb.db["violations"][0]
+    assert v["citizen_id"] is None and v["fine_amount"] == 0 and v["status"] == "Unidentified"
+    assert "notifications" not in sb.db
+
+
+if __name__ == "__main__":
+    import traceback
+    fails = 0
+    for n, f in list(globals().items()):
+        if n.startswith("test_"):
+            try:
+                f(); print("PASS", n)
+            except Exception:
+                fails += 1; print("FAIL", n); traceback.print_exc()
+    sys.exit(1 if fails else 0)

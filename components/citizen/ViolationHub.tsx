@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
+import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
 import { cn, formatDateTime, statusColor, formatCurrency } from "@/lib/utils";
 
 interface Violation {
@@ -14,6 +15,7 @@ interface Violation {
   fine_amount: number; status: string; snapshot_url?: string;
   confidence_score: number; dispute_reason?: string;
   person_bbox?: number[] | null;
+  evidence_path?: string | null; face_similarity?: number | null; identity_status?: string;
   trash_bbox?:  number[] | null;
   // Payment fields — populated after payment is made
   payment_method?: string; paid_at?: string; transaction_ref?: string;
@@ -364,65 +366,7 @@ export function ViolationHub() {
             {/* Snapshot Modal — with SVG bounding box overlay */}
             {modal === "snapshot" && (
               <div className="space-y-4">
-                <div className="rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center relative border border-white/10">
-                  {selected.snapshot_url
-                    ? <img src={selected.snapshot_url} alt="Violation snapshot" className="w-full h-full object-cover" />
-                    : <div className="text-center text-slate-500 space-y-2"><AlertTriangle className="w-10 h-10 mx-auto text-red-400 opacity-40" /><p className="text-sm">Snapshot uploading from edge camera</p></div>
-                  }
-                  {/* SVG bbox overlay — uses stored bbox coords, falls back to representative positions */}
-                  <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ pointerEvents: "none" }}>
-                    {/* Person box */}
-                    {(() => {
-                      const b = selected.person_bbox ?? [0.15, 0.18, 0.42, 0.88];
-                      const [x1, y1, x2, y2] = b.map((n) => n * 100);
-                      return (
-                        <>
-                          <rect x={x1} y={y1} width={x2-x1} height={y2-y1}
-                            fill="rgba(250,204,21,0.06)" stroke="#facc15" strokeWidth="0.5" />
-                          <rect x={x1} y={y1-4} width={x2-x1 < 20 ? 20 : x2-x1} height="4"
-                            fill="rgba(250,204,21,0.8)" />
-                          <text x={x1+0.5} y={y1-0.6} fontSize="2.8" fill="#000" fontWeight="bold">
-                            Person {(selected.confidence_score ?? 0).toFixed(1)}%
-                          </text>
-                        </>
-                      );
-                    })()}
-                    {/* Waste box */}
-                    {(() => {
-                      const b = selected.trash_bbox ?? [0.35, 0.58, 0.55, 0.82];
-                      const [x1, y1, x2, y2] = b.map((n) => n * 100);
-                      return (
-                        <>
-                          <rect x={x1} y={y1} width={x2-x1} height={y2-y1}
-                            fill="rgba(239,68,68,0.1)" stroke="#ef4444" strokeWidth="0.5" />
-                          <rect x={x1} y={y1-4} width={22} height="4"
-                            fill="rgba(239,68,68,0.8)" />
-                          <text x={x1+0.5} y={y1-0.6} fontSize="2.8" fill="#fff" fontWeight="bold">
-                            Waste 97.8%
-                          </text>
-                        </>
-                      );
-                    })()}
-                    {/* Trajectory arrow */}
-                    {selected.person_bbox && selected.trash_bbox && (() => {
-                      const pb = selected.person_bbox.map((n) => n * 100);
-                      const tb = selected.trash_bbox.map((n) => n * 100);
-                      const hx = (pb[0]+pb[2])/2, hy = pb[1]+(pb[3]-pb[1])*0.65;
-                      const wx = (tb[0]+tb[2])/2, wy = (tb[1]+tb[3])/2;
-                      return (
-                        <line x1={hx} y1={hy} x2={wx} y2={wy}
-                          stroke="rgba(168,85,247,0.8)" strokeWidth="0.6"
-                          strokeDasharray="2,1"
-                          markerEnd="url(#arr)" />
-                      );
-                    })()}
-                    <defs>
-                      <marker id="arr" markerWidth="3" markerHeight="3" refX="1.5" refY="1.5" orient="auto">
-                        <path d="M0,0 L0,3 L3,1.5 z" fill="rgba(168,85,247,0.8)" />
-                      </marker>
-                    </defs>
-                  </svg>
-                </div>
+                <EvidenceStrip evidencePath={selected.evidence_path} fallbackUrl={selected.snapshot_url} />
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   {[
                     { label: "Location",      value: selected.location_name },

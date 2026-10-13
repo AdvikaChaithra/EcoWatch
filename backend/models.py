@@ -161,4 +161,5 @@ class LitteringEventPayload(BaseModel):
     identity_status:   str = "PENDING"
     confidence_breakdown: Optional[ConfidenceBreakdown] = None
     evidence_dir:      Optional[str] = None         # relative path, served via /evidence/
+    face_crops:        Optional[List[str]] = None   # base64 head crops of the responsible person (identity pipeline input)
     # snapshot_b64 intentionally removed — never relay images over WebSocket (A9)

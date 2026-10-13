@@ -7,8 +7,10 @@ EcoWatch FastAPI — main.py  (v5)
   - No duplicate routes
 """
 from pathlib import Path
+import asyncio
 import os
 import json
+import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,7 @@ from backend.database import get_supabase, get_ws_manager
 from backend.security import safe_equal, send_sms
 from backend.models import VisionStatus, NodeHealth, LitteringEventPayload
 from backend.routers import auth, violations, reports, workers
+from backend import identity
 
 app = FastAPI(title="EcoWatch API", version="5.0.0", docs_url="/api/docs")
 
@@ -55,6 +58,18 @@ def _verify_engine_key(x_engine_api_key: str = Header(default="")):
 
 if not _ENGINE_KEY:
     print("[EcoWatch] WARNING: ENGINE_API_KEY is not set - vision endpoints are unauthenticated (dev only).")
+
+
+@app.on_event("startup")
+async def _preload_face_model():
+    def _load():
+        try:
+            from backend.routers.auth import _get_face_analyzer
+            _get_face_analyzer()
+            print("[Face] ArcFace model ready")
+        except Exception as e:
+            print(f"[Face] FACE_MODEL_ERROR: {e}")
+    threading.Thread(target=_load, daemon=True, name="face-preload").start()
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -137,18 +152,83 @@ async def vision_pipeline_state(body: dict,
     return {"ok": True}
 
 
+_inflight_events: set = set()
+
+
+def _mask_name(name: str | None) -> str | None:
+    """Global WebSocket clients only ever see a masked name (e.g. 'R*** S***')."""
+    if not name:
+        return None
+    return " ".join(w[0] + "***" if len(w) > 1 else w for w in name.split())
+
+
+async def _process_identity(event: dict, crops: list):
+    """Background: face identification -> violation -> notification. Never blocks the camera."""
+    manager = get_ws_manager()
+    event_id = event["event_id"]
+    base = {"type": "identity_result", "event_id": event_id, "camera_id": event.get("camera_id")}
+    try:
+        try:
+            sb = get_supabase()
+        except RuntimeError as e:
+            print(e)
+            await manager.broadcast({**base, "identity_status": "ERROR", "reason": "DATABASE_ERROR: Supabase not configured"})
+            return
+
+        result = await asyncio.to_thread(identity.identify, sb, crops)
+        out = {**base, "identity_status": result.status, "reason": result.reason,
+               "similarity": result.similarity, "runner_up": result.runner_up,
+               "faces_used": result.faces_used, "crops_received": result.crops_received,
+               "notes": result.notes, "citizen_name": _mask_name(result.citizen_name)}
+
+        if result.status == "ERROR":
+            print(f"[Identity] {event_id[:8]}: {result.reason}")
+            await manager.broadcast(out)
+            return
+
+        try:
+            rec = await asyncio.to_thread(identity.record_event, sb, event, result)
+        except Exception as e:
+            print(f"[Identity] DATABASE_ERROR recording {event_id[:8]}: {e}")
+            await manager.broadcast({**out, "identity_status": "ERROR", "reason": "DATABASE_ERROR: could not save violation"})
+            return
+
+        v = rec["violation"] or {}
+        out["violation_id"] = v.get("id")
+        out["violation_created"] = rec["created"]
+        out["fine_amount"] = v.get("fine_amount")
+        if rec["created"] and result.status == "MATCH":
+            out["sms_status"] = await identity.send_violation_sms(sb, result.citizen_id, rec["notification"])
+        await manager.broadcast(out)
+        print(f"[Identity] {event_id[:8]} -> {result.status} sim={result.similarity} "
+              f"violation={v.get('id')} created={rec['created']}")
+    except Exception as e:
+        print(f"[Identity] unexpected error for {event_id[:8]}: {e}")
+        await manager.broadcast({**base, "identity_status": "ERROR", "reason": f"FACE_MODEL_ERROR: {e}"})
+    finally:
+        _inflight_events.discard(event_id)
+
+
 @app.post("/api/littering_event")
 async def littering_event(payload: LitteringEventPayload,
                            x_engine_api_key: str = Header(default="")):
     """
-    Part 1: broadcast only. No DB write. identity_status=PENDING.
-    A9: no base64 snapshot in payload — evidence saved to disk by engine.
+    Confirmed littering event from the vision engine.
+    1) broadcast immediately (identity_status=PENDING, no images over WS)
+    2) identify the person in the background (face crops -> pgvector) and create the violation.
     """
     _verify_engine_key(x_engine_api_key)
     manager = get_ws_manager()
     event_dict = payload.model_dump()
+    crops = event_dict.pop("face_crops", None) or []
     event_dict.pop("snapshot_b64", None)   # never relay images over WS (A9)
     await manager.broadcast(event_dict)
+
+    # Engine retries / duplicates: process each event_id once.
+    if payload.event_id in _inflight_events:
+        return {"ok": True, "event_id": payload.event_id, "duplicate": True}
+    _inflight_events.add(payload.event_id)
+    asyncio.create_task(_process_identity(event_dict, crops))
     return {"ok": True, "event_id": payload.event_id}
 
 

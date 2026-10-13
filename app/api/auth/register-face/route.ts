@@ -27,12 +27,20 @@ export async function POST(req: NextRequest) {
     // account that can't use face login.
     let faceEmbedding: number[] | null = null;
     if (imageBase64) {
+      if (body.consent !== true) return fail("Consent is required to store face data.", 400);
       const result = await extractEmbedding(imageBase64);
       if (!result.ok) {
         const status = result.reason === "no_face" ? 422 : result.reason === "offline" ? 503 : 502;
         return fail(result.message, status);
       }
       faceEmbedding = result.embedding;
+
+      // One face = one account: block enrolling a face that already belongs to someone else.
+      const { data: dup, error: dupErr } = await supabase.rpc("find_duplicate_face", {
+        query_embedding: faceEmbedding, exclude_citizen: "", min_similarity: 0.6,
+      });
+      if (dupErr) throw dupErr;
+      if (dup && dup.length > 0) return fail("This face is already registered to another account.", 409);
     }
 
     const payload: Record<string, any> = {
@@ -40,7 +48,11 @@ export async function POST(req: NextRequest) {
       eco_points: 0,
       tier: "Bronze",
     };
-    if (faceEmbedding) payload.face_embedding = faceEmbedding;
+    if (faceEmbedding) {
+      payload.face_embedding = faceEmbedding;
+      payload.face_enrolled = true;
+      payload.face_consent_at = new Date().toISOString();
+    }
 
     const { data: citizen, error } = await supabase
       .from("citizens")

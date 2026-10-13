@@ -10,7 +10,6 @@ import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 type Tab = "login" | "register";
-type LoginMethod = "email" | "face";
 
 export default function CitizenAuthPage() {
   const router = useRouter();
@@ -61,43 +60,13 @@ export default function CitizenAuthPage() {
   );
 }
 
-/* ─────────────────────── Login (Email or Face) ───────────────────────── */
+/* ─────────────────────── Login (Email + Phone) ───────────────────────── */
+// Face is NOT used to log in. An optionally enrolled face is only used by the AI camera
+// to identify littering events (with the citizen's consent).
 function LoginForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => void; router: any }) {
-  const [method, setMethod] = useState<LoginMethod>("email");
-
   return (
     <div className="space-y-4 animate-fade-in-up">
-      {/* Method toggle */}
-      <div className="flex gap-1 p-1 bg-civic-900/40 rounded-xl border border-white/5">
-        <button
-          onClick={() => setMethod("email")}
-          className={cn(
-            "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all",
-            method === "email"
-              ? "bg-white/10 text-slate-100 shadow"
-              : "text-slate-500 hover:text-slate-300"
-          )}
-        >
-          <Mail className="w-4 h-4" /> Email & Phone
-        </button>
-        <button
-          onClick={() => setMethod("face")}
-          className={cn(
-            "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all",
-            method === "face"
-              ? "bg-white/10 text-slate-100 shadow"
-              : "text-slate-500 hover:text-slate-300"
-          )}
-        >
-          <Scan className="w-4 h-4" /> Face ID
-        </button>
-      </div>
-
-      {method === "email" ? (
-        <EmailLoginForm setCurrentUser={setCurrentUser} router={router} />
-      ) : (
-        <FaceLoginForm setCurrentUser={setCurrentUser} router={router} />
-      )}
+      <EmailLoginForm setCurrentUser={setCurrentUser} router={router} />
     </div>
   );
 }
@@ -218,139 +187,6 @@ function EmailLoginForm({ setCurrentUser, router }: { setCurrentUser: (u: any) =
   );
 }
 
-/* ─────────────────────── Face Login ───────────────────────── */
-function FaceLoginForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => void; router: any }) {
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
-  const [camOn,     setCamOn]     = useState(false);
-  const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState("");
-  const [captured,  setCaptured]  = useState<string | null>(null);
-  const [matched,   setMatched]   = useState<{ name: string; id: string } | null>(null);
-
-  const startCam = useCallback(async () => {
-    setError("");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" } });
-      streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
-      setCamOn(true);
-    } catch (e: any) { setError("Camera access denied: " + e.message); }
-  }, []);
-
-  const stopCam = useCallback(() => {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCamOn(false);
-    setCaptured(null);
-  }, []);
-
-  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
-
-  const capture = () => {
-    const v = videoRef.current; const c = canvasRef.current;
-    if (!v || !c) return;
-    c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext("2d")!.drawImage(v, 0, 0);
-    setCaptured(c.toDataURL("image/jpeg", 0.9));
-  };
-
-  const handleLogin = async () => {
-    if (!captured) { setError("Please capture a face snapshot first."); return; }
-    setLoading(true); setError("");
-    try {
-      const res = await fetch("/api/auth/face-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: captured }),
-      });
-      const data = await res.json().catch(() => ({} as any));
-      if (!res.ok || !data.success) {
-        setError(data.error || "Face not recognized. Please register first.");
-        return;
-      }
-      setMatched({ name: data.citizen.name, id: data.citizen.id });
-      setCurrentUser({
-        id:         data.citizen.id,
-        role:       "citizen",
-        name:       data.citizen.name,
-        phone:      data.citizen.phone,
-        ward:       data.citizen.ward,
-        eco_points: data.citizen.eco_points,
-        tier:       data.citizen.tier,
-      });
-      stopCam();
-      setTimeout(() => router.push("/citizen"), 1200);
-    } catch (e: any) {
-      setError("Login failed: " + e.message);
-    } finally { setLoading(false); }
-  };
-
-  if (matched) return (
-    <div className="glass-card p-8 text-center space-y-4">
-      <CheckCircle2 className="w-16 h-16 text-eco-400 mx-auto" />
-      <h2 className="font-display text-2xl font-bold text-eco-300">Welcome, {matched.name}!</h2>
-      <p className="text-slate-400 text-sm">Redirecting to your dashboard…</p>
-    </div>
-  );
-
-  return (
-    <div className="glass-card p-6 space-y-5">
-      <p className="text-sm text-slate-400">
-        Position your face in the frame and capture a photo to authenticate via{" "}
-        <span className="text-eco-400 font-medium">ArcFace biometrics</span>.{" "}
-        <span className="text-yellow-400">Requires the AI backend to be running.</span>
-      </p>
-
-      <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-white/10">
-        <video ref={videoRef} autoPlay muted playsInline className={cn("w-full h-full object-cover", !camOn && "hidden")} />
-        {captured && <img src={captured} alt="" className="absolute inset-0 w-full h-full object-cover" />}
-        {!camOn && !captured && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-500">
-            <Scan className="w-12 h-12" />
-            <p className="text-sm">Camera not started</p>
-          </div>
-        )}
-        <canvas ref={canvasRef} className="hidden" />
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" /> {error}
-        </div>
-      )}
-
-      <div className="flex gap-3">
-        {!camOn && !captured && (
-          <button onClick={startCam} className="btn-eco flex-1 justify-center">
-            <Camera className="w-4 h-4" /> Open Camera
-          </button>
-        )}
-        {camOn && !captured && (
-          <button onClick={capture} className="btn-eco flex-1 justify-center">
-            📸 Capture Face
-          </button>
-        )}
-        {captured && (
-          <>
-            <button onClick={() => { setCaptured(null); if (!camOn) startCam(); }} className="btn-eco-outline flex-1 justify-center">
-              <X className="w-4 h-4" /> Retake
-            </button>
-            <button onClick={handleLogin} disabled={loading} className="btn-eco flex-1 justify-center">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
-              {loading ? "Matching…" : "Login with Face ID"}
-            </button>
-          </>
-        )}
-      </div>
-      <p className="text-center text-xs text-slate-500">
-        512-D ArcFace embedding · Cosine similarity ≥ 0.70 · pgvector
-      </p>
-    </div>
-  );
-}
-
 /* ─────────────────────── Registration ─────────────────────── */
 function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => void; router: any }) {
   const videoRef  = useRef<HTMLVideoElement>(null);
@@ -362,6 +198,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
   const [error,    setError]   = useState("");
   const [success,  setSuccess] = useState(false);
   const [showFace, setShowFace]= useState(false);
+  const [consent,  setConsent] = useState(false);
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "", ward: "", gov_id: "" });
 
   const startCam = useCallback(async () => {
@@ -390,12 +227,13 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
     e.preventDefault();
     if (!form.name || !form.phone) { setError("Name and phone are required."); return; }
     if (!form.email) { setError("Email is required to enable login."); return; }
+    if (captured && !consent) { setError("Please give consent to store your face data, or remove the photo."); return; }
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/auth/register-face", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, imageBase64: captured ?? null }),
+        body: JSON.stringify({ ...form, imageBase64: captured ?? null, consent: !!(captured && consent) }),
       });
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Registration failed."); return; }
@@ -459,13 +297,20 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
         >
           <Scan className="w-4 h-4 text-eco-400 shrink-0" />
           <span>
-            <strong className="text-slate-300">Optional:</strong> Enroll Face for biometric login
+            <strong className="text-slate-300">Optional:</strong> Enroll face for litter-camera identification (not used to log in)
           </span>
           <span className="ml-auto text-xs text-slate-500">{showFace ? "▲ Hide" : "▼ Show"}</span>
         </button>
 
         {showFace && (
           <div className="space-y-3">
+            <label className="flex items-start gap-2 text-[11px] text-slate-400 leading-snug">
+              <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5" />
+              <span>
+                I consent to EcoWatch storing a numeric face template (not the photo) to identify me if the AI camera
+                records a littering violation linked to me. I can request deletion at any time.
+              </span>
+            </label>
             <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-white/10">
               <video ref={videoRef} autoPlay muted playsInline className={cn("w-full h-full object-cover", !camOn && "hidden")} />
               {captured && <img src={captured} alt="" className="absolute inset-0 w-full h-full object-cover" />}

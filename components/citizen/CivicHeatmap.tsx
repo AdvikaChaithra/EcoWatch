@@ -1,4 +1,5 @@
 "use client";
+import { SectorRanking } from "@/components/citizen/SectorRanking";
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { Search, Layers, MapPin, Loader2 } from "lucide-react";
@@ -119,6 +120,8 @@ export function CivicHeatmap() {
           <p className="text-xs text-slate-500">Live data from Supabase</p>
         </div>
       </div>
+
+      <SectorRanking />
 
       {/* Legend */}
       <div className="glass-card-sm p-3 flex flex-wrap gap-4">
