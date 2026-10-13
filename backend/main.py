@@ -216,7 +216,7 @@ async def health():
         "status":     "ok",
         "version":    app.version,
         "ws_clients": manager.connection_count,
-        "supabase":   bool(os.getenv("NEXT_PUBLIC_SUPABASE_URL")),
+        "supabase":   bool(os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL")),
     }
 
 

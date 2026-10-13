@@ -9,7 +9,9 @@ from typing import Optional, Set
 from fastapi import WebSocket, HTTPException
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path
+load_dotenv()  # cwd .env
+load_dotenv(Path(__file__).resolve().parent / ".env")  # backend/.env regardless of cwd
 
 _SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL", "")
 _SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY", "")
