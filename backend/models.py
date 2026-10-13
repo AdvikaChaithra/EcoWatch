@@ -1,22 +1,22 @@
 """
 EcoWatch — All Pydantic Models (v4)
 """
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, EmailStr
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field
 
 
 # ─── Auth / Registration ──────────────────────────────────────────────────────
 
 class FaceRegisterRequest(BaseModel):
     citizen_id: str
-    frames: List[str]
+    frames: List[str] = Field(max_length=5)
 
 class FaceLoginRequest(BaseModel):
-    frame: str
+    frame: str = Field(max_length=8_000_000)
 
 class WorkerLoginRequest(BaseModel):
     employee_id: str
-    pin: str
+    pin: str = Field(pattern=r"^\d{4}$")
 
 class AdminLoginRequest(BaseModel):
     email: str
@@ -28,7 +28,7 @@ class OTPRequest(BaseModel):
 
 class OTPVerify(BaseModel):
     phone: str
-    otp: str
+    otp: str = Field(pattern=r"^\d{6}$")
 
 
 # ─── Violations ───────────────────────────────────────────────────────────────
@@ -44,10 +44,15 @@ class ViolationCreate(BaseModel):
     person_bbox: Optional[List[float]] = None
     trash_bbox:  Optional[List[float]] = None
 
+ViolationStatus = Literal["Pending", "Paid", "Disputed", "Dismissed", "Upheld"]
+ReportStatus = Literal["Submitted", "Worker Assigned", "Cleaning in Progress",
+                       "Pending Verification", "Cleaned & Verified"]
+
+
 class ViolationUpdate(BaseModel):
-    status: Optional[str] = None
+    status: Optional[ViolationStatus] = None
     dispute_reason: Optional[str] = None
-    fine_amount: Optional[float] = None
+    fine_amount: Optional[float] = Field(default=None, ge=0, le=100000)
 
 class PaymentRequest(BaseModel):
     violation_id: str
@@ -64,10 +69,10 @@ class ReportCreate(BaseModel):
     location_name: str
     lat: float
     lng: float
-    reported_image_b64: Optional[str] = None
+    reported_image_b64: Optional[str] = Field(default=None, max_length=14_000_000)
 
 class ReportStatusUpdate(BaseModel):
-    status: str
+    status: ReportStatus
 
 class AssignWorker(BaseModel):
     worker_id: str
@@ -80,7 +85,7 @@ class WorkerCreate(BaseModel):
     name: str
     phone: str
     employee_id: Optional[str] = None
-    pin_hash: str = "1234"
+    pin: str = Field(default="1234", pattern=r"^\d{4}$")
     ward: Optional[str] = None
 
 class WorkerStatusUpdate(BaseModel):
@@ -92,7 +97,7 @@ class WorkerLocationUpdate(BaseModel):
 
 class BonusUpdate(BaseModel):
     worker_id: str
-    amount: float
+    amount: float = Field(gt=0, le=100000)
 
 
 # ─── SMS ──────────────────────────────────────────────────────────────────────

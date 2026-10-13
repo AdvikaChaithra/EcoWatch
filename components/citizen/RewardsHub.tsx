@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { Award, Star, ShoppingBag, Loader2, CheckCircle2, Zap, X } from "lucide-react";
 import { getRewards, supabase } from "@/lib/supabase";
@@ -26,6 +27,7 @@ export function RewardsHub() {
   const user = useEcoStore((s) => s.currentUser);
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [redeeming, setRedeeming] = useState<string | null>(null);
   const [redeemed, setRedeemed] = useState<Set<string>>(new Set());
   const [ecoPoints, setEcoPoints] = useState(user?.eco_points ?? 0);
@@ -42,7 +44,8 @@ export function RewardsHub() {
     try {
       const data = await getRewards("citizen");
       setRewards(data ?? []);
-    } catch { setRewards([]); }
+      setLoadError("");
+    } catch (e) { setRewards([]); setLoadError(errMsg(e, "Could not load rewards.")); }
     finally { setLoading(false); }
   }
 
@@ -64,12 +67,15 @@ export function RewardsHub() {
       else if (newPoints >= 2000) newTier = "Gold";
       else if (newPoints >= 500)  newTier = "Silver";
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("citizens")
         .update({ eco_points: newPoints, tier: newTier })
-        .eq("id", user.id);
+        .eq("id", user.id)
+        .eq("eco_points", ecoPoints) // optimistic lock: fail if points changed elsewhere
+        .select("id");
 
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error("Your points balance changed. Please refresh and try again.");
 
       setRedeemed((s) => new Set(s).add(reward.id));
       setEcoPoints(newPoints);
@@ -93,6 +99,7 @@ export function RewardsHub() {
 
   return (
     <div className="space-y-6">
+      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
       {/* FIX 3: Voucher Redemption Modal */}
       {voucherModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">

@@ -23,3 +23,8 @@ ultralytics==8.3.34
 # CPU fallback:
 # torch>=2.2.0,<2.5
 # torchvision>=0.17.0,<0.20
+
+# Face recognition (auth router: extract-embedding / register-face / face-login)
+numpy>=1.26,<2.0
+insightface==0.7.3
+onnxruntime==1.20.1

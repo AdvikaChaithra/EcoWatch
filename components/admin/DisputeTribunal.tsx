@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { getViolations, updateViolationStatus } from "@/lib/supabase";
@@ -9,6 +10,7 @@ interface Violation { id: string; citizen_id: string; timestamp: string; locatio
 export function DisputeTribunal() {
   const [disputes, setDisputes] = useState<Violation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selected, setSelected] = useState<Violation | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
@@ -20,7 +22,8 @@ export function DisputeTribunal() {
     try {
       const all = await getViolations();
       setDisputes((all ?? []).filter((v: Violation) => v.status === "Disputed"));
-    } catch {} finally { setLoading(false); }
+      setError("");
+    } catch (e) { setError(errMsg(e, "Could not load disputes.")); } finally { setLoading(false); }
   }
 
   async function handleAction(dismiss: boolean) {
@@ -31,6 +34,8 @@ export function DisputeTribunal() {
       setSuccess(dismiss ? "Penalty waived. Citizen notified." : "Fine upheld. Citizen dispute rejected.");
       setDisputes((d) => d.filter((x) => x.id !== selected.id));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2000);
+    } catch (e) {
+      setError(errMsg(e, "Could not update the dispute. Please try again."));
     } finally { setActionLoading(false); }
   }
 
@@ -38,6 +43,7 @@ export function DisputeTribunal() {
 
   return (
     <div className="space-y-4">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       <div className="flex items-center gap-2 mb-2">
         <Gavel className="w-5 h-5 text-red-400" />
         <h2 className="text-xl font-display font-bold text-slate-100">Dispute Tribunal</h2>

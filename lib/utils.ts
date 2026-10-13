@@ -97,5 +97,5 @@ export function truncate(str: string, n: number): string {
 }
 
 export function generateId(): string {
-  return `VIO-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+  return `VIO-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }

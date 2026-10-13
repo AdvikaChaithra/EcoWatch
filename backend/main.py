@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.database import get_supabase, get_ws_manager
+from backend.security import safe_equal, send_sms
 from backend.models import VisionStatus, NodeHealth, LitteringEventPayload
 from backend.routers import auth, violations, reports, workers
 
@@ -48,11 +49,18 @@ app.include_router(workers.router)
 _ENGINE_KEY = os.getenv("ENGINE_API_KEY", "")
 
 def _verify_engine_key(x_engine_api_key: str = Header(default="")):
-    if _ENGINE_KEY and x_engine_api_key != _ENGINE_KEY:
+    if _ENGINE_KEY and not safe_equal(x_engine_api_key, _ENGINE_KEY):
         raise HTTPException(status_code=403, detail="Invalid ENGINE_API_KEY")
 
 
+if not _ENGINE_KEY:
+    print("[EcoWatch] WARNING: ENGINE_API_KEY is not set - vision endpoints are unauthenticated (dev only).")
+
+
 # ─── WebSocket ────────────────────────────────────────────────────────────────
+
+_WS_MAX_MSG = 4096
+
 
 @app.websocket("/ws")
 @app.websocket("/ws/alerts")
@@ -62,15 +70,34 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             data = await ws.receive_text()
+            if len(data) > _WS_MAX_MSG:
+                continue
             try:
                 msg = json.loads(data)
-                if msg.get("type") == "ping":
-                    await ws.send_json({"type": "pong", "connections": manager.connection_count})
-                elif msg.get("type") == "worker_location":
-                    await manager.broadcast(msg)
             except json.JSONDecodeError:
-                pass
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") == "ping":
+                await ws.send_json({"type": "pong", "connections": manager.connection_count})
+            elif msg.get("type") == "worker_location":
+                # Relay only whitelisted, well-typed fields — clients can't inject arbitrary payloads.
+                try:
+                    await manager.broadcast({
+                        "type":      "worker_location",
+                        "worker_id": str(msg["worker_id"])[:64],
+                        "lat":       float(msg["lat"]),
+                        "lng":       float(msg["lng"]),
+                        "name":      str(msg.get("name", ""))[:64],
+                        "ward":      str(msg.get("ward", ""))[:64],
+                    })
+                except (KeyError, TypeError, ValueError):
+                    pass
     except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WS] connection error: {e}")
+    finally:
         manager.disconnect(ws)
 
 
@@ -96,7 +123,7 @@ async def vision_telemetry(payload: NodeHealth,
                             x_engine_api_key: str = Header(default="")):
     _verify_engine_key(x_engine_api_key)
     manager = get_ws_manager()
-    await manager.broadcast(payload.dict())
+    await manager.broadcast(payload.model_dump())
     return {"ok": True}
 
 
@@ -119,7 +146,7 @@ async def littering_event(payload: LitteringEventPayload,
     """
     _verify_engine_key(x_engine_api_key)
     manager = get_ws_manager()
-    event_dict = payload.dict()
+    event_dict = payload.model_dump()
     event_dict.pop("snapshot_b64", None)   # never relay images over WS (A9)
     await manager.broadcast(event_dict)
     return {"ok": True, "event_id": payload.event_id}
@@ -135,7 +162,7 @@ async def camera_config():
         "longitude":     os.getenv("CAMERA_LONGITUDE", ""),
         "location_name": os.getenv("CAMERA_LOCATION_NAME", ""),
         "ward":          os.getenv("CAMERA_WARD", ""),
-        "mjpeg_url":     f"http://localhost:{os.getenv('MJPEG_PORT','8001')}/stream.mjpg",
+        "mjpeg_url":     os.getenv("MJPEG_PUBLIC_URL") or f"http://localhost:{os.getenv('MJPEG_PORT','8001')}/stream.mjpg",
     }
 
 
@@ -149,9 +176,11 @@ async def civic_index():
         active  = sb.table("dump_reports").select("*", count="exact", head=True).not_.eq("status", "Cleaned & Verified").execute().count or 0
         pending = sb.table("violations").select("*", count="exact", head=True).eq("status", "Pending").execute().count or 0
         cleaned = sb.table("dump_reports").select("*", count="exact", head=True).eq("status", "Cleaned & Verified").execute().count or 0
-        score   = max(10, min(100, 100 - active * 3 - pending * 2 + cleaned))
-    except Exception:
-        score = 72
+    except Exception as e:
+        # Don't fabricate a score — an outage must not look like a healthy city.
+        print(f"[CivicIndex] DB error: {e}")
+        raise HTTPException(status_code=503, detail="Civic index unavailable: database error")
+    score = max(10, min(100, 100 - active * 3 - pending * 2 + cleaned))
     await manager.broadcast({"type": "civic_index", "value": score})
     return {"civic_index": score}
 
@@ -163,27 +192,19 @@ _SMS_KEY = os.getenv("SMS_API_KEY", "")
 @app.post("/api/sms/dispatch")
 async def manual_sms(body: dict, x_sms_api_key: str = Header(default="")):
     """A10: protected by SMS_API_KEY. Leave SMS_API_KEY blank to disable protection (dev only)."""
-    if _SMS_KEY and x_sms_api_key != _SMS_KEY:
+    if _SMS_KEY and not safe_equal(x_sms_api_key, _SMS_KEY):
         raise HTTPException(status_code=403, detail="Invalid SMS_API_KEY")
-    phone   = body.get("phone", "")
-    message = body.get("message", "")
-    sid     = os.getenv("TWILIO_ACCOUNT_SID", "")
-    token   = os.getenv("TWILIO_AUTH_TOKEN", "")
-    from_   = os.getenv("TWILIO_FROM_NUMBER", "")
-    if sid and token and phone:
-        try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
-                    auth=(sid, token),
-                    data={"From": from_, "To": phone, "Body": message},
-                )
-        except Exception as e:
-            print(f"[SMS] Twilio error: {e}")
-    else:
-        print(f"[SMS] Simulated (no Twilio creds) → {phone}: {message}")
-    return {"success": True}
+    phone   = str(body.get("phone", "")).strip()
+    message = str(body.get("message", "")).strip()
+    if not phone or not message:
+        raise HTTPException(status_code=400, detail="phone and message are required")
+    if len(message) > 640:
+        raise HTTPException(status_code=400, detail="message too long (max 640 characters)")
+    sent = await send_sms(phone, message)
+    if not sent and os.getenv("TWILIO_ACCOUNT_SID"):
+        raise HTTPException(status_code=502, detail="SMS provider rejected or failed to send the message")
+    # success=False + simulated=True when Twilio isn't configured, so callers can tell nothing was sent.
+    return {"success": sent, "simulated": not sent}
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -193,7 +214,7 @@ async def health():
     manager = get_ws_manager()
     return {
         "status":     "ok",
-        "version":    "4.0.0",
+        "version":    app.version,
         "ws_clients": manager.connection_count,
         "supabase":   bool(os.getenv("NEXT_PUBLIC_SUPABASE_URL")),
     }

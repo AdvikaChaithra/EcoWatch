@@ -12,11 +12,10 @@ Endpoints:
 
 import os
 import base64
-import random
-import hashlib
+import secrets
 import numpy as np
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Depends
 from supabase import Client
@@ -26,12 +25,15 @@ from backend.models import (
     WorkerLoginRequest, AdminLoginRequest,
     OTPRequest, OTPVerify,
 )
-from backend.database import get_supabase
+from backend.database import db
+from backend.security import utcnow, utcnow_iso, safe_equal, verify_secret, send_sms
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # In-memory OTP store (production: use Redis + TTL)
-_otp_store: dict[str, tuple[str, datetime]] = {}
+_otp_store: dict[str, dict] = {}
+_OTP_MAX_ATTEMPTS = 5
+_OTP_RESEND_SECONDS = 30
 
 # ── Shared: lazy-load InsightFace (heavy model, load once) ────────────────────
 _face_analyzer = None
@@ -51,7 +53,10 @@ def _get_face_analyzer():
 def _decode_b64_to_cv2(b64_string: str):
     """Decode a base64 image string (with or without data: prefix) to OpenCV BGR array."""
     import cv2
-    raw   = base64.b64decode(b64_string.split(",")[-1])
+    try:
+        raw = base64.b64decode(b64_string.split(",")[-1], validate=True)
+    except Exception:
+        raise ValueError("Image is not valid base64.")
     nparr = np.frombuffer(raw, np.uint8)
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
@@ -84,7 +89,7 @@ async def extract_embedding(body: dict):
 
         faces = fa.get(img)
         if not faces:
-            return {"success": False, "error": "No face detected. Ensure good lighting and face is centered."}
+            raise HTTPException(status_code=422, detail="No face detected. Ensure good lighting and face is centered.")
 
         # Normalize to unit vector (cosine similarity compatible)
         emb = faces[0].embedding.astype(np.float32)
@@ -92,10 +97,15 @@ async def extract_embedding(body: dict):
 
         return {"success": True, "embedding": emb.tolist()}
 
+    except HTTPException:
+        raise
     except ImportError:
-        return {"success": False, "error": "InsightFace not installed. Run: pip install insightface onnxruntime"}
+        raise HTTPException(status_code=503, detail="InsightFace not installed. Run: pip install insightface onnxruntime")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        print(f"[Auth] extract-embedding failed: {e}")
+        raise HTTPException(status_code=500, detail="Face processing failed")
 
 
 # ─── Citizen: Face Registration ───────────────────────────────────────────────
@@ -103,7 +113,7 @@ async def extract_embedding(body: dict):
 @router.post("/register-face")
 async def register_face(
     payload: FaceRegisterRequest,
-    sb: Client = Depends(get_supabase),
+    sb: Client = Depends(db),
 ):
     """
     Receives up to 3 base64 webcam frames.
@@ -126,21 +136,26 @@ async def register_face(
                 continue  # skip bad frames
 
         if not embeddings:
-            return {"success": False, "message": "No face detected in any frame. Ensure good lighting."}
+            raise HTTPException(status_code=422, detail="No face detected in any frame. Ensure good lighting.")
 
         avg = np.mean(embeddings, axis=0)
         avg = avg / (np.linalg.norm(avg) + 1e-9)
 
-        sb.table("citizens").update({"face_embedding": avg.tolist()}).eq("id", payload.citizen_id).execute()
+        upd = sb.table("citizens").update({"face_embedding": avg.tolist()}).eq("id", payload.citizen_id).execute()
+        if not upd.data:
+            raise HTTPException(status_code=404, detail="Citizen not found")
         return {
             "success": True,
             "message": f"512-D ArcFace embedding enrolled ({len(embeddings)} frames averaged)",
         }
 
+    except HTTPException:
+        raise
     except ImportError:
-        return {"success": False, "message": "InsightFace not installed on this server."}
+        raise HTTPException(status_code=503, detail="InsightFace not installed on this server.")
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        print(f"[Auth] register-face failed: {e}")
+        raise HTTPException(status_code=500, detail="Face enrollment failed")
 
 
 # ─── Citizen: Face Login ──────────────────────────────────────────────────────
@@ -148,7 +163,7 @@ async def register_face(
 @router.post("/face-login")
 async def face_login(
     payload: FaceLoginRequest,
-    sb: Client = Depends(get_supabase),
+    sb: Client = Depends(db),
 ):
     """
     Extracts 512-D embedding from a single webcam frame,
@@ -179,115 +194,140 @@ async def face_login(
                 detail="Face not recognized (similarity < 0.70). Please register or use OTP login.",
             )
 
-        citizen = result.data[0]
+        citizen = {k: v for k, v in result.data[0].items() if k not in ("face_embedding", "gov_id")}
         return {
             "citizen":    citizen,
-            "confidence": round(float(citizen.get("similarity", 0.9)) * 100, 2),
+            "confidence": round(float(citizen.get("similarity") or 0) * 100, 2),
         }
 
     except HTTPException:
         raise
     except ImportError:
         raise HTTPException(status_code=503, detail="InsightFace not installed on server.")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[Auth] face-login failed: {e}")
+        raise HTTPException(status_code=500, detail="Face login failed")
 
 
 # ─── Citizen: OTP ─────────────────────────────────────────────────────────────
 
+def _prune_otps():
+    now = utcnow()
+    for k in [k for k, v in _otp_store.items() if v["expiry"] < now]:
+        _otp_store.pop(k, None)
+
+
 @router.post("/otp/send")
-async def send_otp(payload: OTPRequest, sb: Client = Depends(get_supabase)):
+async def send_otp(payload: OTPRequest, sb: Client = Depends(db)):
     """Generate 6-digit OTP, store temporarily, dispatch via Twilio SMS."""
-    res = sb.table("citizens").select("id, name").eq("phone", payload.phone).execute()
+    _prune_otps()
+    existing = _otp_store.get(payload.phone)
+    if existing and (utcnow() - existing["sent_at"]).total_seconds() < _OTP_RESEND_SECONDS:
+        raise HTTPException(status_code=429, detail="Please wait before requesting another OTP")
+
+    try:
+        res = sb.table("citizens").select("id, name").eq("phone", payload.phone).execute()
+    except Exception as e:
+        print(f"[Auth] OTP citizen lookup failed: {e}")
+        raise HTTPException(status_code=502, detail="Database error. Please try again.")
     if not res.data:
         raise HTTPException(status_code=404, detail="No citizen registered with this phone number")
 
-    otp = str(random.randint(100000, 999999))
-    _otp_store[payload.phone] = (otp, datetime.utcnow() + timedelta(minutes=10))
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    now = utcnow()
+    _otp_store[payload.phone] = {"otp": otp, "expiry": now + timedelta(minutes=10), "sent_at": now, "attempts": 0}
 
-    twilio_sid   = os.getenv("TWILIO_ACCOUNT_SID", "")
-    twilio_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    if twilio_sid and twilio_token:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.twilio.com/2010-04-01/Accounts/{twilio_sid}/Messages.json",
-                    auth=(twilio_sid, twilio_token),
-                    data={
-                        "From": os.getenv("TWILIO_FROM_NUMBER"),
-                        "To":   payload.phone,
-                        "Body": f"EcoWatch OTP: {otp}. Valid for 10 minutes. Do not share.",
-                    },
-                )
-        except Exception as e:
-            print(f"[Twilio] SMS failed: {e}")
+    twilio_configured = bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN"))
+    if twilio_configured:
+        sent = await send_sms(payload.phone, f"EcoWatch OTP: {otp}. Valid for 10 minutes. Do not share.")
+        if not sent:
+            _otp_store.pop(payload.phone, None)
+            raise HTTPException(status_code=502, detail="Could not send the OTP SMS. Please try again.")
     else:
-        print(f"[OTP][DEV] {payload.phone} → {otp}  (Twilio not configured)")
+        # Dev only: OTPs are never logged when Twilio is configured.
+        print(f"[OTP][DEV] {payload.phone} -> {otp}  (Twilio not configured)")
 
     return {"success": True, "message": "OTP dispatched"}
 
 
 @router.post("/otp/verify")
-async def verify_otp(payload: OTPVerify, sb: Client = Depends(get_supabase)):
-    stored = _otp_store.get(payload.phone)
-    if not stored:
+async def verify_otp(payload: OTPVerify, sb: Client = Depends(db)):
+    entry = _otp_store.get(payload.phone)
+    if not entry:
         raise HTTPException(status_code=400, detail="OTP not found or already used")
-    code, expiry = stored
-    if datetime.utcnow() > expiry:
-        del _otp_store[payload.phone]
+    if utcnow() > entry["expiry"]:
+        _otp_store.pop(payload.phone, None)
         raise HTTPException(status_code=400, detail="OTP expired")
-    if payload.otp != code:
+    entry["attempts"] += 1
+    if entry["attempts"] > _OTP_MAX_ATTEMPTS:
+        _otp_store.pop(payload.phone, None)
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Request a new OTP.")
+    if not safe_equal(payload.otp, entry["otp"]):
         raise HTTPException(status_code=401, detail="Incorrect OTP")
 
-    del _otp_store[payload.phone]
-    res = sb.table("citizens").select("*").eq("phone", payload.phone).execute()
-    return {"success": True, "citizen": res.data[0] if res.data else None}
+    _otp_store.pop(payload.phone, None)
+    try:
+        res = sb.table("citizens").select("id,name,phone,email,address,ward,eco_points,tier,created_at").eq("phone", payload.phone).execute()
+    except Exception as e:
+        print(f"[Auth] OTP verify lookup failed: {e}")
+        raise HTTPException(status_code=502, detail="Database error. Please try again.")
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Citizen no longer exists")
+    return {"success": True, "citizen": res.data[0]}
 
 
 # ─── Admin: Email + TOTP ──────────────────────────────────────────────────────
 
 @router.post("/admin/login")
-async def admin_login(payload: AdminLoginRequest, sb: Client = Depends(get_supabase)):
-    res = sb.table("admins").select("*").eq("email", payload.email).execute()
-    if not res.data:
-        raise HTTPException(status_code=401, detail="Admin not found")
+async def admin_login(payload: AdminLoginRequest, sb: Client = Depends(db)):
+    try:
+        res = sb.table("admins").select("*").eq("email", payload.email.strip()).execute()
+    except Exception as e:
+        print(f"[Auth] admin lookup failed: {e}")
+        raise HTTPException(status_code=502, detail="Database error. Please try again.")
 
-    admin = res.data[0]
-    # Plain-text for demo (schema seeds password_hash = 'admin123')
-    if admin.get("password_hash", "") != payload.password:
+    admin = res.data[0] if res.data else None
+    # Same message for unknown email and wrong password (no account enumeration).
+    if not admin or not verify_secret(payload.password, admin.get("password_hash")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # Optional TOTP
-    if admin.get("totp_secret") and payload.totp_code:
+    secret = admin.get("totp_secret")
+    if secret:
+        if not payload.totp_code:
+            raise HTTPException(status_code=401, detail="2FA code required")
         try:
             import pyotp
-            totp = pyotp.TOTP(admin["totp_secret"])
-            if not totp.verify(payload.totp_code, valid_window=1):
-                raise HTTPException(status_code=401, detail="Invalid 2FA code")
         except ImportError:
-            pass  # pyotp not installed — skip TOTP in dev
+            raise HTTPException(status_code=503, detail="2FA is enabled but pyotp is not installed on the server")
+        if not pyotp.TOTP(secret).verify(payload.totp_code, valid_window=1):
+            raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    elif os.getenv("REQUIRE_2FA", "").lower() == "true":
+        raise HTTPException(status_code=403, detail="2FA is required but not enrolled for this account")
 
-    return {"success": True, "admin": {k: v for k, v in admin.items() if k != "password_hash"}}
+    return {"success": True, "admin": {k: v for k, v in admin.items() if k not in ("password_hash", "totp_secret")}}
 
 
 # ─── Worker: PIN Login ────────────────────────────────────────────────────────
 
 @router.post("/worker/login")
-async def worker_login(payload: WorkerLoginRequest, sb: Client = Depends(get_supabase)):
-    res = sb.table("workers").select("*").eq("employee_id", payload.employee_id).execute()
-    if not res.data:
-        raise HTTPException(status_code=404, detail="Worker ID not found")
-
-    worker = res.data[0]
+async def worker_login(payload: WorkerLoginRequest, sb: Client = Depends(db)):
+    try:
+        res = sb.table("workers").select("*").eq("employee_id", payload.employee_id.strip()).execute()
+    except Exception as e:
+        print(f"[Auth] worker lookup failed: {e}")
+        raise HTTPException(status_code=502, detail="Database error. Please try again.")
+    worker = res.data[0] if res.data else None
+    if not worker or not verify_secret(payload.pin, worker.get("pin_hash")):
+        raise HTTPException(status_code=401, detail="Invalid employee ID or PIN")
     if not worker.get("active", True):
         raise HTTPException(status_code=403, detail="Worker account is deactivated")
-    if worker.get("pin_hash", "") != payload.pin:
-        raise HTTPException(status_code=401, detail="Incorrect PIN")
 
-    sb.table("workers").update({
-        "status":     "On Duty",
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", worker["id"]).execute()
+    try:
+        sb.table("workers").update({"status": "On Duty", "updated_at": utcnow_iso()}).eq("id", worker["id"]).execute()
+    except Exception as e:
+        print(f"[Auth] could not set worker On Duty: {e}")
+        raise HTTPException(status_code=502, detail="Login succeeded but shift status could not be updated. Try again.")
 
     return {"success": True, "worker": {k: v for k, v in worker.items() if k != "pin_hash"}}

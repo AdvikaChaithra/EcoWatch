@@ -52,11 +52,12 @@ export async function createCitizen(payload: {
 }
 
 export async function updateCitizenEcoPoints(id: string, delta: number) {
-  const { data: citizen } = await supabase
+  const { data: citizen, error: readErr } = await supabase
     .from("citizens")
     .select("eco_points")
     .eq("id", id)
     .single();
+  if (readErr) throw readErr;
   const newPoints = (citizen?.eco_points ?? 0) + delta;
   let tier = "Bronze";
   if (newPoints >= 5000) tier = "Eco-Champion";
@@ -291,12 +292,14 @@ export function haversineMeters(
 export async function checkDuplicateReport(lat: number, lng: number): Promise<boolean> {
   // Fetch recent reports from last 24h and check proximity
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("dump_reports")
     .select("lat, lng")
     .gte("created_at", since);
+  // Surface the failure: silently returning false would let duplicates through during an outage.
+  if (error) throw error;
   if (!data) return false;
   return data.some(
-    (r) => haversineMeters(lat, lng, r.lat, r.lng) < 15
+    (r) => r.lat != null && r.lng != null && haversineMeters(lat, lng, r.lat, r.lng) < 15
   );
 }

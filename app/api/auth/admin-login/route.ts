@@ -1,64 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { serverSupabase, fail, serverError, readJson, verifySecret, verifyTotp } from "@/lib/server";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-
-// Demo TOTP: accept "123456" for all admin accounts in dev mode
+// Demo shortcuts are OFF by default. Set ALLOW_DEMO_AUTH=true (never in production) to accept
+// the demo 2FA PIN for admins that have no TOTP secret enrolled.
 const DEMO_TOTP = "123456";
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password, totp } = await req.json();
+    const body = await readJson<{ email?: string; password?: string; totp?: string }>(req);
+    if (!body) return fail("Invalid request body.", 400);
+    const email = typeof body.email === "string" ? body.email.trim() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const totp = typeof body.totp === "string" ? body.totp.trim() : "";
 
-    if (!email || !password) {
-      return NextResponse.json({ success: false, error: "Email and password are required." }, { status: 400 });
-    }
+    if (!email || !password) return fail("Email and password are required.", 400);
 
-    // ── Validate 2FA PIN ──────────────────────────────────────────────────
-    if (totp && totp !== DEMO_TOTP) {
-      return NextResponse.json({ success: false, error: "Invalid 2FA PIN." }, { status: 401 });
-    }
-
-    // ── Lookup admin by email ─────────────────────────────────────────────
+    const supabase = serverSupabase();
     const { data: admin, error } = await supabase
       .from("admins")
-      .select("id, name, email, password_hash, admin_id, ward_jurisdiction, designation")
+      .select("id, name, email, password_hash, totp_secret, admin_id, ward_jurisdiction, designation")
       .eq("email", email)
       .maybeSingle();
-
     if (error) throw error;
 
-    if (!admin) {
-      return NextResponse.json({ success: false, error: "No admin account found for this email." }, { status: 401 });
+    // Same response for unknown email and wrong password (no account enumeration).
+    if (!admin || !verifySecret(password, admin.password_hash)) {
+      return fail("Invalid email or password.", 401);
     }
 
-    // ── Verify password ───────────────────────────────────────────────────
-    // Demo: plain-text comparison (schema seeds password_hash = 'admin123')
-    // Fallback: accept 'admin123' for the seeded demo admin regardless of DB state
-    const trimmedPw   = password.trim();
-    const demoBypass  = email.trim() === "admin@bbmp.gov.in" && trimmedPw === "admin123";
-    const demoBypass2 = email.trim() === "sunitha@bbmp.gov.in" && trimmedPw === "admin123";
-    const dbMatch     = trimmedPw === (admin.password_hash ?? "").trim();
-
-    if (!dbMatch && !demoBypass && !demoBypass2) {
-      return NextResponse.json({ success: false, error: "Incorrect password." }, { status: 401 });
+    // ── 2FA ───────────────────────────────────────────────────────────────
+    if (admin.totp_secret) {
+      if (!totp) return fail("2FA code required.", 401);
+      if (!verifyTotp(admin.totp_secret, totp)) return fail("Invalid 2FA code.", 401);
+    } else if (process.env.ALLOW_DEMO_AUTH === "true") {
+      if (totp && totp !== DEMO_TOTP) return fail("Invalid 2FA PIN.", 401);
+    } else if (process.env.REQUIRE_2FA === "true") {
+      return fail("2FA is required but not enrolled for this account.", 403);
     }
 
     return NextResponse.json({
       success: true,
       admin: {
-        id:               admin.id,
-        name:             admin.name,
-        email:            admin.email,
-        admin_id:         admin.admin_id,
-        ward_jurisdiction:admin.ward_jurisdiction,
-        designation:      admin.designation,
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        admin_id: admin.admin_id,
+        ward_jurisdiction: admin.ward_jurisdiction,
+        designation: admin.designation,
       },
     });
-  } catch (e: any) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+  } catch (e) {
+    return serverError(e, "admin-login");
   }
 }

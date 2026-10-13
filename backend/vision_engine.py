@@ -505,6 +505,7 @@ class VisionEngine:
         self.synth_tracker = SyntheticWasteTracker()
 
         self._running = False
+        self._post_fail_logged: Dict[str, float] = {}
         self._http    = httpx.Client(
             timeout=10.0,
             headers={"X-Engine-API-Key": ENGINE_API_KEY} if ENGINE_API_KEY else {},
@@ -527,14 +528,34 @@ class VisionEngine:
 
     # ── Status ────────────────────────────────────────────────────────────────
 
+    def _safe_post(self, path: str, payload: dict, timeout: float, label: str, retries: int = 0) -> bool:
+        """POST to the backend, checking the HTTP status. Failures are logged (rate-limited
+        per label so a down backend doesn't flood the console); optional retries with backoff."""
+        last = ""
+        for attempt in range(retries + 1):
+            try:
+                r = self._http.post(f"{BACKEND_URL}{path}", json=payload, timeout=timeout)
+                if r.status_code < 300:
+                    self._post_fail_logged.pop(label, None)
+                    return True
+                last = f"HTTP {r.status_code}" + (" (check ENGINE_API_KEY)" if r.status_code in (401, 403) else "")
+                if r.status_code < 500:
+                    break  # client error: retrying won't help
+            except Exception as e:
+                last = str(e)
+            if attempt < retries:
+                time.sleep(min(2 ** attempt, 8))
+        now = time.time()
+        if now - self._post_fail_logged.get(label, 0) > 30:
+            self._post_fail_logged[label] = now
+            print(f"[Engine] {label} POST failed: {last}")
+        return False
+
     def _post_status(self, stage: str, msg: str, error: bool = False):
         print(f"[Boot] {stage}: {msg}")
-        try:
-            self._http.post(f"{BACKEND_URL}/api/vision/status", json={
-                "stage": stage, "message": msg, "error": error, "camera_id": CAMERA_ID,
-            }, timeout=3.0)
-        except Exception:
-            pass
+        self._safe_post("/api/vision/status", {
+            "stage": stage, "message": msg, "error": error, "camera_id": CAMERA_ID,
+        }, 3.0, "status")
 
     def _telemetry_loop(self):
         while self._running:
@@ -543,10 +564,7 @@ class VisionEngine:
             snap.update({"type": "node_health", "camera_id": CAMERA_ID,
                          "camera_status": self.camera.status,
                          "camera_resolution": f"{self.camera.width}x{self.camera.height}"})
-            try:
-                self._http.post(f"{BACKEND_URL}/api/vision/telemetry", json=snap, timeout=2.0)
-            except Exception:
-                pass
+            self._safe_post("/api/vision/telemetry", snap, 2.0, "telemetry")
 
     def _pipeline_loop(self):
         while self._running:
@@ -555,11 +573,7 @@ class VisionEngine:
                 state = dict(self._pipeline_state)
             if not state:
                 continue
-            try:
-                self._http.post(f"{BACKEND_URL}/api/vision/pipeline_state",
-                                json=state, timeout=1.0)
-            except Exception:
-                pass
+            self._safe_post("/api/vision/pipeline_state", state, 1.0, "pipeline_state")
 
     # ── Model loading ─────────────────────────────────────────────────────────
 
@@ -923,10 +937,9 @@ class VisionEngine:
         threading.Thread(target=self._post_event, args=(payload,), daemon=True).start()
 
     def _post_event(self, payload: dict):
-        try:
-            self._http.post(f"{BACKEND_URL}/api/littering_event", json=payload, timeout=10.0)
-        except Exception as e:
-            print(f"[Engine] POST event failed: {e}")
+        # Confirmed violations matter: retry with backoff (evidence is already on disk regardless).
+        if not self._safe_post("/api/littering_event", payload, 10.0, "littering_event", retries=4):
+            print(f"[Engine] Event {payload.get('event_id')} NOT delivered; evidence kept at {payload.get('evidence_dir')}")
 
     # ── Run ───────────────────────────────────────────────────────────────────
 

@@ -3,28 +3,34 @@ import { useEffect, useRef, useCallback } from "react";
 import { useEcoStore, LiveAlert } from "@/lib/store";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
+const MAX_BACKOFF_MS = 30_000;
 
 export function useRealtime() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const store = useEcoStore();
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attemptRef = useRef(0);
+  const unmountedRef = useRef(false);
 
   const connect = useCallback(() => {
+    if (unmountedRef.current) return;
     try {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log("[EcoWatch WS] Connected");
+        attemptRef.current = 0; // reset backoff after a successful connection
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data as string);
+          // Always read fresh state: this closure outlives many renders.
+          const store = useEcoStore.getState();
 
           if (msg.type === "violation") {
             const alert: LiveAlert = {
-              id: msg.id ?? crypto.randomUUID(),
+              id: msg.id || crypto.randomUUID(),
               type: "violation",
               message: `🚨 Litter violation detected — ${msg.location ?? "Unknown"}`,
               location: msg.location,
@@ -35,43 +41,64 @@ export function useRealtime() {
             store.addLiveAlert(alert);
             store.setTotalViolationsToday(store.totalViolationsToday + 1);
 
-            // SMS-style notification banner
             store.showNotificationBanner(
-              `EcoWatch Alert: ${msg.citizen_name ?? "A citizen"} was detected littering at ${msg.location} on ${new Date().toLocaleString("en-IN")}. A fine of ₹200 has been issued.`
+              `EcoWatch Alert: ${msg.citizen_name ?? "A citizen"} was detected littering at ${msg.location ?? "an unknown location"} on ${new Date().toLocaleString("en-IN")}. A fine of ₹200 has been issued.`
             );
-            setTimeout(() => store.hideNotificationBanner(), 8000);
+            if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+            bannerTimerRef.current = setTimeout(() => useEcoStore.getState().hideNotificationBanner(), 8000);
+          }
+
+          if (msg.type === "littering_event") {
+            // Vision-engine candidate (identity still pending) — surface as an alert only.
+            store.addLiveAlert({
+              id: msg.event_id || crypto.randomUUID(),
+              type: "violation",
+              message: `🎥 Littering event detected — ${msg.location?.name ?? msg.camera_id ?? "camera"}`,
+              location: msg.location?.name,
+              timestamp: msg.timestamp ?? new Date().toISOString(),
+              confidence: msg.event_confidence,
+            });
           }
 
           if (msg.type === "report") {
-            const alert: LiveAlert = {
-              id: msg.id ?? crypto.randomUUID(),
+            store.addLiveAlert({
+              id: msg.id || crypto.randomUUID(),
               type: "report",
               message: `📍 New dump report — ${msg.category} at ${msg.location}`,
               location: msg.location,
               timestamp: new Date().toISOString(),
-            };
-            store.addLiveAlert(alert);
+            });
             store.setActiveDumpReports(store.activeDumpReports + 1);
           }
 
-          if (msg.type === "worker_status") {
-            store.setWorkersOnDuty(msg.count ?? store.workersOnDuty);
+          if (msg.type === "report_verified" && msg.approved) {
+            store.setActiveDumpReports(Math.max(0, store.activeDumpReports - 1));
           }
 
-          if (msg.type === "worker_location" && msg.worker_id) {
+          if (msg.type === "worker_status") {
+            store.setWorkersOnDuty(typeof msg.count === "number" ? msg.count : store.workersOnDuty);
+          }
+
+          if (
+            msg.type === "worker_location" &&
+            msg.worker_id &&
+            Number.isFinite(msg.lat) &&
+            Number.isFinite(msg.lng)
+          ) {
+            const prev = store.workerLocations[msg.worker_id];
             store.setWorkerLocation(msg.worker_id, {
               lat: msg.lat,
               lng: msg.lng,
-              name: msg.name ?? "Worker",
-              ward: msg.ward ?? "",
+              name: msg.name || prev?.name || "Worker",
+              ward: msg.ward || prev?.ward || "",
             });
           }
 
-          if (msg.type === "civic_index") {
-            store.setCivicIndex(msg.value ?? store.civicIndex);
+          if (msg.type === "civic_index" && typeof msg.value === "number") {
+            store.setCivicIndex(msg.value);
           }
         } catch (err) {
-          console.error("[EcoWatch WS] Parse error:", err);
+          console.error("[EcoWatch WS] Message handling error:", err);
         }
       };
 
@@ -80,19 +107,30 @@ export function useRealtime() {
       };
 
       ws.onclose = () => {
+        if (unmountedRef.current) return; // intentional close on unmount: don't reconnect
         if (reconnectRef.current) clearTimeout(reconnectRef.current);
-        reconnectRef.current = setTimeout(connect, 5000);
+        const delay = Math.min(1000 * 2 ** attemptRef.current, MAX_BACKOFF_MS);
+        attemptRef.current += 1;
+        reconnectRef.current = setTimeout(connect, delay);
       };
-    } catch {
-      // Backend not running — silent fail, UI works normally
+    } catch (err) {
+      console.warn("[EcoWatch WS] Could not open socket:", err);
+      if (!unmountedRef.current) {
+        const delay = Math.min(1000 * 2 ** attemptRef.current, MAX_BACKOFF_MS);
+        attemptRef.current += 1;
+        reconnectRef.current = setTimeout(connect, delay);
+      }
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
+    unmountedRef.current = false;
     connect();
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      unmountedRef.current = true;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+      wsRef.current?.close();
     };
   }, [connect]);
 

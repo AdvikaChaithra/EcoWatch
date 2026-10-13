@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { Timer, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
 import { getDumpReports, verifyReport, supabase } from "@/lib/supabase";
@@ -68,6 +69,7 @@ function SlaTimer({ createdAt }: { createdAt: string }) {
 export function SLAMonitor() {
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selected, setSelected] = useState<Report | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
@@ -77,13 +79,15 @@ export function SLAMonitor() {
   async function loadReports() {
     setLoading(true);
     try {
-      const { data } = await supabase
+      const { data, error: qErr } = await supabase
         .from("dump_reports")
         .select("*, workers(name)")
         .in("status", ["Worker Assigned","Cleaning in Progress","Pending Verification"])
         .order("created_at", { ascending: true });
+      if (qErr) throw qErr;
       setReports(data ?? []);
-    } catch {} finally { setLoading(false); }
+      setError("");
+    } catch (e) { setError(errMsg(e, "Could not load active tasks.")); } finally { setLoading(false); }
   }
 
   async function handleVerify(approved: boolean) {
@@ -93,17 +97,22 @@ export function SLAMonitor() {
       await verifyReport(selected.id, approved);
       if (approved && selected.assigned_worker_id) {
         // Award worker bonus
-        const { data: worker } = await supabase.from("workers").select("tasks_completed, bonus_accrued").eq("id", selected.assigned_worker_id).single();
+        const { data: worker, error: wErr } = await supabase.from("workers").select("tasks_completed, bonus_accrued, eco_points").eq("id", selected.assigned_worker_id).single();
+        if (wErr) throw wErr;
         if (worker) {
-          await supabase.from("workers").update({
-            tasks_completed: worker.tasks_completed + 1,
-            bonus_accrued: worker.bonus_accrued + 200,
+          const { error: uErr } = await supabase.from("workers").update({
+            tasks_completed: (worker.tasks_completed ?? 0) + 1,
+            bonus_accrued: Number(worker.bonus_accrued ?? 0) + 200,
+            eco_points: (worker.eco_points ?? 0) + 100,
           }).eq("id", selected.assigned_worker_id);
+          if (uErr) throw uErr;
         }
       }
       setSuccess(approved ? "Cleanup approved! Worker bonus of ₹200 credited." : "Rejected. Report re-dispatched to queue.");
       setReports((r) => r.filter((x) => x.id !== selected.id));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2500);
+    } catch (e) {
+      setError(errMsg(e, "Could not complete verification. Please check the report and retry."));
     } finally { setActionLoading(false); }
   }
 
@@ -111,6 +120,7 @@ export function SLAMonitor() {
 
   return (
     <div className="space-y-4">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-display font-bold text-slate-100">SLA Monitor & Verification</h2>
         <span className="badge bg-orange-500/10 text-orange-400 border-orange-500/20">{reports.length} active</span>

@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { Loader2, Users, MapPin, RefreshCw } from "lucide-react";
@@ -21,6 +22,7 @@ export function OperationsHeatmap() {
   const [dumps,   setDumps]   = useState<DumpPoint[]>([]);
   const [wrkrs,   setWrkrs]   = useState<WorkerPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [center,  setCenter]  = useState<[number, number]>([12.9716, 77.5946]);
 
   // FIX 4: Subscribe to real-time worker location updates from the Zustand store.
@@ -47,13 +49,17 @@ export function OperationsHeatmap() {
         supabase.from("dump_reports").select("lat,lng,severity,category,location_name").not("lat", "is", "null"),
         supabase.from("workers").select("id,name,status,ward,lat,lng").eq("status", "On Duty").not("lat", "is", "null"),
       ]);
+      if (dRes.error) throw dRes.error;
+      if (wRes.error) throw wRes.error;
       setDumps(dRes.data ?? []);
       setWrkrs(wRes.data ?? []);
-    } catch {} finally { setLoading(false); }
+      setError("");
+    } catch (e) { setError(errMsg(e, "Could not load map data.")); } finally { setLoading(false); }
   }
 
   return (
     <div className="glass-card overflow-hidden">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       <div className="flex items-center justify-between p-4 border-b border-white/8">
         <div className="flex items-center gap-2">
           <MapPin className="w-4 h-4 text-eco-400" />

@@ -6,7 +6,7 @@ Fails with a clear, named error message instead of crashing at import.
 import os
 import sys
 from typing import Optional, Set
-from fastapi import WebSocket
+from fastapi import WebSocket, HTTPException
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,7 +38,7 @@ def get_supabase():
             f"[EcoWatch] Supabase credentials are missing from the environment.\n"
             f"  Missing: {', '.join(missing)}\n"
             f"  Copy backend/.env.example to backend/.env and fill in your Supabase project details.\n"
-            f"  See https://supabase.com/dashboard → Project Settings → API."
+            f"  See https://supabase.com/dashboard > Project Settings > API."
         )
 
     try:
@@ -51,6 +51,15 @@ def get_supabase():
         )
     except Exception as exc:
         raise RuntimeError(f"[EcoWatch] Supabase client creation failed: {exc}") from exc
+
+
+def db():
+    """FastAPI dependency: Supabase client, or a clean 503 when misconfigured."""
+    try:
+        return get_supabase()
+    except RuntimeError as exc:
+        print(str(exc).encode("ascii", "replace").decode())
+        raise HTTPException(status_code=503, detail="Database is not configured or unavailable")
 
 
 # ─── WebSocket Manager ────────────────────────────────────────────────────────
@@ -68,7 +77,7 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         dead: Set[WebSocket] = set()
-        for ws in self.active:
+        for ws in list(self.active):
             try:
                 await ws.send_json(message)
             except Exception:
