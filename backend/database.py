@@ -14,7 +14,8 @@ load_dotenv()  # cwd .env
 load_dotenv(Path(__file__).resolve().parent / ".env")  # backend/.env regardless of cwd
 
 _SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL", "")
-_SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY", "")
+_SUPABASE_KEY = (os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+                 or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY", ""))
 
 # A10: lazy init — do NOT crash at import time when env vars are missing.
 _supabase = None
