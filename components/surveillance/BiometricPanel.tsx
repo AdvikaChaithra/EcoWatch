@@ -24,8 +24,26 @@ interface LitteringEventPending {
   };
 }
 
+/** Real result of the backend identity pipeline for one littering event (WebSocket `identity_result`). */
+export interface IdentityResultMsg {
+  event_id: string;
+  identity_status: "MATCH" | "UNCERTAIN" | "NO_MATCH" | "NO_FACE" | "ERROR";
+  reason?: string;
+  similarity?: number | null;
+  runner_up?: number | null;
+  faces_used?: number;
+  crops_received?: number;
+  notes?: string[];
+  citizen_name?: string | null;   // masked by the backend
+  violation_id?: string | null;
+  fine_amount?: number | null;
+  sms_status?: "NOT_CONFIGURED" | "SENT" | "FAILED";
+}
+
 interface Props {
   match:        FaceMatchData | null;
+  /** Backend identity result for the current event (null while pending) */
+  identity?:    IdentityResultMsg | null;
   running:      boolean;
   /** Part 1: confirmed littering event with identity_status = PENDING */
   pendingEvent?: LitteringEventPending | null;
@@ -37,8 +55,9 @@ interface Props {
  * Part 2: shows full ArcFace match result (citizen name, cosine similarity bar).
  * No fake data — PENDING state is the honest representation of Part 1 status.
  */
-export function BiometricPanel({ match, running, pendingEvent }: Props) {
-  const hasPendingEvent = running && pendingEvent && pendingEvent.identity_status === "PENDING";
+export function BiometricPanel({ match, running, pendingEvent, identity }: Props) {
+  const idForEvent = identity && pendingEvent && identity.event_id === pendingEvent.event_id ? identity : null;
+  const hasPendingEvent = running && !!pendingEvent;
   const hasMatch        = running && match;
 
   const confidenceColor = !match
@@ -122,8 +141,7 @@ export function BiometricPanel({ match, running, pendingEvent }: Props) {
           </div>
           {match.citizenId && (
             <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20">
-              <span className="text-xs text-red-400 font-semibold">₹200 Fine Issued</span>
-              <span className="text-[10px] text-red-400/70">SMS dispatched</span>
+              <span className="text-xs text-red-400 font-semibold">Fine issued</span>
             </div>
           )}
         </div>
@@ -164,15 +182,53 @@ export function BiometricPanel({ match, running, pendingEvent }: Props) {
             )}
           </div>
 
-          {/* Identity PENDING notice */}
-          <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-600/30">
-            <p className="text-[10px] text-slate-400 font-mono text-center">
-              IDENTITY: <span className="text-yellow-400">PENDING</span>
-            </p>
-            <p className="text-[9px] text-slate-600 text-center mt-1">
-              ArcFace biometric resolution — Part 2
-            </p>
-          </div>
+          {/* Identity (real backend result) */}
+          {!idForEvent ? (
+            <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-600/30">
+              <p className="text-[10px] text-slate-400 font-mono text-center">
+                IDENTITY: <span className="text-yellow-400">IDENTIFYING…</span>
+              </p>
+              <p className="text-[9px] text-slate-600 text-center mt-1">
+                Face crops → ArcFace → pgvector (runs only on confirmed events)
+              </p>
+            </div>
+          ) : (
+            <div className={cn(
+              "p-3 rounded-xl border space-y-1.5",
+              idForEvent.identity_status === "MATCH" ? "bg-red-500/10 border-red-500/30"
+              : idForEvent.identity_status === "ERROR" ? "bg-orange-500/10 border-orange-500/30"
+              : "bg-slate-800/60 border-slate-600/30"
+            )}>
+              <p className="text-[11px] font-mono text-center">
+                IDENTITY: <span className={cn(
+                  idForEvent.identity_status === "MATCH" ? "text-red-300" : "text-yellow-300")}>
+                  {idForEvent.identity_status === "MATCH" ? "MATCHED" : idForEvent.identity_status}
+                </span>
+              </p>
+              {idForEvent.identity_status === "MATCH" && (
+                <>
+                  <p className="text-xs text-slate-100 text-center font-semibold">{idForEvent.citizen_name}</p>
+                  <p className="text-[10px] text-slate-300 text-center">
+                    similarity {((idForEvent.similarity ?? 0) * 100).toFixed(1)}% · fine ₹{idForEvent.fine_amount ?? 0} issued
+                  </p>
+                  <p className="text-[10px] text-slate-400 text-center">
+                    Citizen dashboard alert: sent · SMS: {idForEvent.sms_status ?? "NOT_CONFIGURED"}
+                  </p>
+                </>
+              )}
+              {idForEvent.identity_status !== "MATCH" && (
+                <p className="text-[10px] text-slate-400 text-center">
+                  {idForEvent.reason}{idForEvent.identity_status !== "ERROR" ? " — no citizen fine issued" : ""}
+                </p>
+              )}
+              {idForEvent.faces_used !== undefined && (
+                <p className="text-[9px] text-slate-600 text-center">
+                  {idForEvent.faces_used}/{idForEvent.crops_received ?? 0} face crops usable
+                  {idForEvent.notes && idForEvent.notes.length ? ` · ${idForEvent.notes.slice(0,3).join(", ")}` : ""}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Location + time */}
           <div className="flex items-center gap-2 text-[10px] text-slate-500">

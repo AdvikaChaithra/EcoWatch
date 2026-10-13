@@ -1,27 +1,33 @@
 "use client";
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
+import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
+import { useSectorScope } from "@/hooks/useSectorScope";
 import { useState, useEffect } from "react";
 import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { getViolations, updateViolationStatus } from "@/lib/supabase";
 import { cn, formatDateTime, statusColor } from "@/lib/utils";
 
-interface Violation { id: string; citizen_id: string; timestamp: string; location_name: string; fine_amount: number; status: string; confidence_score: number; dispute_reason?: string; snapshot_url?: string; }
+interface Violation { id: string; citizen_id: string; timestamp: string; location_name: string; fine_amount: number; status: string; confidence_score: number; dispute_reason?: string; snapshot_url?: string; evidence_path?: string | null; face_similarity?: number | null; }
 
 export function DisputeTribunal() {
   const [disputes, setDisputes] = useState<Violation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [unidentified, setUnidentified] = useState<Violation[]>([]);
+  const [openUnid, setOpenUnid] = useState<string | null>(null);
   const [selected, setSelected] = useState<Violation | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
 
-  useEffect(() => { loadDisputes(); }, []);
+  const { inScope, key: scopeKey } = useSectorScope();
+  useEffect(() => { loadDisputes(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadDisputes() {
     setLoading(true);
     try {
       const all = await getViolations();
-      setDisputes((all ?? []).filter((v: Violation) => v.status === "Disputed"));
+      setDisputes((all ?? []).filter((v: Violation) => v.status === "Disputed" && inScope((v as any).sector_id)));
+      setUnidentified((all ?? []).filter((v: Violation) => v.status === "Unidentified" && inScope((v as any).sector_id)));
       setError("");
     } catch (e) { setError(errMsg(e, "Could not load disputes.")); } finally { setLoading(false); }
   }
@@ -98,14 +104,8 @@ export function DisputeTribunal() {
               </div>
             ) : (
               <div className="space-y-4">
-                {/* Snapshot */}
-                <div className="aspect-video rounded-xl bg-civic-800 border border-white/10 overflow-hidden relative">
-                  {selected.snapshot_url ? (
-                    <img src={selected.snapshot_url} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">No snapshot available</div>
-                  )}
-                </div>
+                {/* Evidence: the 3 real frames (holding / dropped / leaving) */}
+                <EvidenceStrip evidencePath={selected.evidence_path} fallbackUrl={selected.snapshot_url} />
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="glass-card-sm p-3">
                     <p className="text-xs text-slate-400">AI Confidence</p>
@@ -137,6 +137,30 @@ export function DisputeTribunal() {
           </div>
         </div>
       )}
+
+      {/* Littering events the camera confirmed but could NOT identify — no fine is issued */}
+      <div className="pt-4">
+        <h3 className="text-sm font-semibold text-slate-300 mb-2">
+          Unidentified littering events <span className="text-slate-500 font-normal">({unidentified.length}) · no citizen fine issued</span>
+        </h3>
+        {unidentified.length === 0 ? (
+          <p className="text-xs text-slate-500">None.</p>
+        ) : (
+          <div className="space-y-2">
+            {unidentified.slice(0, 20).map((v: any) => (
+              <div key={v.id} className="glass-card p-3 space-y-2">
+                <button className="w-full text-left" onClick={() => setOpenUnid(openUnid === v.id ? null : v.id)}>
+                  <p className="text-sm text-slate-200">{v.location_name} · {formatDateTime(v.timestamp)}</p>
+                  <p className="text-[11px] text-slate-500">
+                    {v.identity_status ?? "UNIDENTIFIED"}{v.face_similarity != null ? ` · best similarity ${(v.face_similarity * 100).toFixed(0)}%` : ""} · tap to view evidence
+                  </p>
+                </button>
+                {openUnid === v.id && <EvidenceStrip evidencePath={v.evidence_path} fallbackUrl={v.snapshot_url} />}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Camera, MapPin, Loader2, CheckCircle2, AlertCircle, Upload, X } from "lucide-react";
 import { useCamera } from "@/hooks/useCamera";
 import { useGeolocation } from "@/hooks/useGeolocation";
-import { createDumpReport, checkDuplicateReport, updateCitizenEcoPoints } from "@/lib/supabase";
+import { createDumpReport, checkDuplicateReport, updateCitizenEcoPoints, getNearestSectorId } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +69,7 @@ export function ReportTool() {
         lat: geo.lat!,
         lng: geo.lng!,
         reported_image_url: imageUrl,
+        sector_id: await getNearestSectorId(geo.lat!, geo.lng!),
       });
 
       // Award Eco-Points

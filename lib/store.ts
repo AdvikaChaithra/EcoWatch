@@ -15,6 +15,8 @@ export interface LiveAlert {
   bbox?: { person?: number[]; waste?: number[] };
 }
 
+export interface Sector { id: string; area: string; name: string; admin_id?: string | null; lat?: number; lng?: number; }
+
 export interface AuthUser {
   id: string;
   role: Role;
@@ -58,6 +60,12 @@ interface EcoWatchStore {
   setCurrentUser: (user: AuthUser | null) => void;
   setActiveRole: (role: Role) => void;
   logout: () => void;
+
+  // Admin sector scope
+  mySectors: Sector[];
+  sectorFilter: string; // "all" or a sector id
+  setMySectors: (s: Sector[]) => void;
+  setSectorFilter: (id: string) => void;
 
   // Live Stats (WebSocket-fed)
   totalViolationsToday: number;
@@ -103,6 +111,11 @@ export const useEcoStore = create<EcoWatchStore>((set, get) => ({
     saveSession(null, "citizen");
     set({ currentUser: null, isAuthenticated: false, activeRole: "citizen" });
   },
+
+  mySectors: [],
+  sectorFilter: "all",
+  setMySectors: (s) => set({ mySectors: s, sectorFilter: "all" }),
+  setSectorFilter: (id) => set({ sectorFilter: id }),
 
   totalViolationsToday: 0,
   activeDumpReports: 0,

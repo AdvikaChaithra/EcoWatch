@@ -5,6 +5,7 @@ import { MapPin, User, Zap, X, CheckCircle2, Loader2, Navigation } from "lucide-
 import { getDumpReports, getWorkers, assignWorkerToReport } from "@/lib/supabase";
 import { haversineMeters } from "@/lib/supabase";
 import { cn, formatDate, severityColor, statusColor } from "@/lib/utils";
+import { useSectorScope } from "@/hooks/useSectorScope";
 
 interface Report { id: string; category: string; severity: string; location_name: string; lat: number; lng: number; status: string; created_at: string; reported_image_url?: string; }
 interface Worker { id: string; name: string; phone: string; ward: string; status: string; lat?: number; lng?: number; tasks_completed: number; }
@@ -18,7 +19,8 @@ export function TaskDispatch() {
   const [dispatching, setDispatching] = useState<string | null>(null);
   const [success, setSuccess] = useState("");
 
-  useEffect(() => { loadData(); }, []);
+  const { inScope, key: scopeKey } = useSectorScope();
+  useEffect(() => { loadData(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadData() {
     setLoading(true);
@@ -27,8 +29,8 @@ export function TaskDispatch() {
         getDumpReports(),
         getWorkers(),
       ]);
-      setReports((rData ?? []).filter((r: Report) => r.status === "Submitted"));
-      setWorkers((wData ?? []).filter((w: Worker) => w.status === "On Duty"));
+      setReports((rData ?? []).filter((r: Report) => r.status === "Submitted" && inScope((r as any).sector_id)));
+      setWorkers((wData ?? []).filter((w: Worker) => w.status === "On Duty" && inScope((w as any).sector_id)));
       setError("");
     } catch (e) { setError(errMsg(e, "Could not load reports and workers.")); } finally { setLoading(false); }
   }

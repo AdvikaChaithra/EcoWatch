@@ -134,7 +134,31 @@ export async function getDumpReports(citizenId?: string) {
   return data;
 }
 
+// ─── Sectors ─────────────────────────────────────────────────────────────────
+
+export interface SectorRow { id: string; area: string; name: string; admin_id: string | null; lat: number; lng: number; }
+
+export async function getSectors(): Promise<SectorRow[]> {
+  const { data, error } = await supabase.from("sectors").select("id,area,name,admin_id,lat,lng");
+  if (error) throw error;
+  return (data ?? []) as SectorRow[];
+}
+
+/** Nearest sector centre to a point (used to route reports to the owning admin). */
+export async function getNearestSectorId(lat: number, lng: number): Promise<string | null> {
+  try {
+    const sectors = await getSectors();
+    if (sectors.length === 0) return null;
+    return sectors.reduce((best, s) =>
+      haversineMeters(lat, lng, s.lat, s.lng) < haversineMeters(lat, lng, best.lat, best.lng) ? s : best
+    ).id;
+  } catch {
+    return null; // sectors not set up yet - report is still saved
+  }
+}
+
 export async function createDumpReport(payload: {
+  sector_id?: string | null;
   citizen_id: string;
   category: string;
   severity: string;
@@ -191,7 +215,7 @@ export async function verifyReport(reportId: string, approved: boolean) {
 // ─── Workers ──────────────────────────────────────────────────────────────────
 
 // Safe columns only — excludes pin_hash (credential)
-const WORKER_SAFE_COLS = "id,name,phone,ward,employee_id,status,active,lat,lng,tasks_completed,eco_points,bonus_accrued,tier,admin_id,created_at,updated_at";
+const WORKER_SAFE_COLS = "id,name,phone,ward,employee_id,status,active,lat,lng,tasks_completed,eco_points,bonus_accrued,tier,admin_id,sector_id,created_at,updated_at";
 
 export async function getWorkers(wardFilter?: string) {
   let query = supabase

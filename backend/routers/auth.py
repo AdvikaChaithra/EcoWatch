@@ -3,7 +3,6 @@ backend/routers/auth.py — Production biometric authentication router.
 Endpoints:
   POST /api/auth/extract-embedding  — decode base64 frame → 512-D ArcFace embedding
   POST /api/auth/register-face      — enroll citizen biometric (multiple frames averaged)
-  POST /api/auth/face-login         — webcam snapshot → match_citizen_face RPC
   POST /api/auth/otp/send           — 6-digit OTP via Twilio (or logged for dev)
   POST /api/auth/otp/verify         — verify OTP, return citizen profile
   POST /api/auth/admin/login        — email + password + optional TOTP
@@ -21,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from supabase import Client
 
 from backend.models import (
-    FaceRegisterRequest, FaceLoginRequest,
+    FaceRegisterRequest,
     WorkerLoginRequest, AdminLoginRequest,
     OTPRequest, OTPVerify,
 )
@@ -65,7 +64,7 @@ def _decode_b64_to_cv2(b64_string: str):
 
 
 # ─── NEW: Extract Embedding ──────────────────────────────────────────────────
-# THIS is the missing endpoint called by Next.js /api/auth/face-login and
+# THIS is the missing endpoint called by Next.js register-face route and
 # /api/auth/register-face routes.
 
 @router.post("/extract-embedding")
@@ -76,7 +75,6 @@ async def extract_embedding(body: dict):
 
     This is the bridge between Next.js API routes and the InsightFace model.
     Called by:
-      - /api/auth/face-login   (Next.js route.ts)
       - /api/auth/register-face (Next.js route.ts)
     """
     image_b64 = body.get("image_base64", "")
@@ -84,17 +82,18 @@ async def extract_embedding(body: dict):
         raise HTTPException(status_code=400, detail="image_base64 field is required.")
 
     try:
-        fa  = _get_face_analyzer()
-        img = _decode_b64_to_cv2(image_b64)
-
-        faces = fa.get(img)
-        if not faces:
-            raise HTTPException(status_code=422, detail="No face detected. Ensure good lighting and face is centered.")
-
-        # Normalize to unit vector (cosine similarity compatible)
-        emb = faces[0].embedding.astype(np.float32)
-        emb = emb / (np.linalg.norm(emb) + 1e-9)
-
+        # Same model + quality gate as camera-time recognition (consistent enrollment/recognition).
+        from backend.identity import embed_crop
+        notes: list = []
+        res = embed_crop(image_b64, notes)
+        if res is None:
+            reasons = {
+                "no_face_detected": "No face detected. Face the camera in good lighting.",
+            }
+            first = notes[0] if notes else "no_face_detected"
+            msg = reasons.get(first, f"Face quality too low ({first}). Move closer, face the camera, improve lighting and hold still.")
+            raise HTTPException(status_code=422, detail=msg)
+        emb, _det = res
         return {"success": True, "embedding": emb.tolist()}
 
     except HTTPException:
@@ -156,59 +155,6 @@ async def register_face(
     except Exception as e:
         print(f"[Auth] register-face failed: {e}")
         raise HTTPException(status_code=500, detail="Face enrollment failed")
-
-
-# ─── Citizen: Face Login ──────────────────────────────────────────────────────
-
-@router.post("/face-login")
-async def face_login(
-    payload: FaceLoginRequest,
-    sb: Client = Depends(db),
-):
-    """
-    Extracts 512-D embedding from a single webcam frame,
-    then calls Supabase RPC `match_citizen_face` (pgvector cosine similarity).
-    Returns matched citizen profile if similarity >= 0.70.
-    """
-    try:
-        fa  = _get_face_analyzer()
-        img = _decode_b64_to_cv2(payload.frame)
-
-        faces = fa.get(img)
-        if not faces:
-            raise HTTPException(status_code=400, detail="No face detected in frame. Try better lighting.")
-
-        emb = faces[0].embedding.astype(np.float32)
-        emb = emb / (np.linalg.norm(emb) + 1e-9)
-
-        # ── Call Supabase pgvector RPC ────────────────────────────────────────
-        result = sb.rpc("match_citizen_face", {
-            "query_embedding": emb.tolist(),
-            "match_threshold": 0.70,
-            "match_count":     1,
-        }).execute()
-
-        if not result.data:
-            raise HTTPException(
-                status_code=401,
-                detail="Face not recognized (similarity < 0.70). Please register or use OTP login.",
-            )
-
-        citizen = {k: v for k, v in result.data[0].items() if k not in ("face_embedding", "gov_id")}
-        return {
-            "citizen":    citizen,
-            "confidence": round(float(citizen.get("similarity") or 0) * 100, 2),
-        }
-
-    except HTTPException:
-        raise
-    except ImportError:
-        raise HTTPException(status_code=503, detail="InsightFace not installed on server.")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        print(f"[Auth] face-login failed: {e}")
-        raise HTTPException(status_code=500, detail="Face login failed")
 
 
 # ─── Citizen: OTP ─────────────────────────────────────────────────────────────

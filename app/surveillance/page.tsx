@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Activity, AlertTriangle, Wifi, WifiOff, Play, Square, RefreshCw, MapPin, Clock, ExternalLink } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { CameraFeed } from "@/components/surveillance/CameraFeed";
-import { BiometricPanel } from "@/components/surveillance/BiometricPanel";
+import { BiometricPanel, type IdentityResultMsg } from "@/components/surveillance/BiometricPanel";
 import { PenaltyTerminal, LogEntry } from "@/components/surveillance/PenaltyTerminal";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +52,7 @@ interface LitterEvent {
   waste_bbox:       number[];
   event_confidence: number;
   action_label:     string;          // DROP | PICKUP | PASS_BY | PLACE_IN_BIN
-  identity_status:  string;          // always "PENDING" in Part 1
+  identity_status:  string;          // "PENDING" until the backend sends identity_result
   confidence_breakdown?: {
     association: number; separation: number; stationary: number;
     departure: number; dwell_seconds: number;
@@ -103,6 +103,7 @@ export default function SurveillanceDashboard() {
   const [logs,          setLogs]          = useState<LogEntry[]>([]);
   const [litterEvents,  setLitterEvents]  = useState<LitterEvent[]>([]);
   const [latestEvent,   setLatestEvent]   = useState<LitterEvent | null>(null);
+  const [identity,      setIdentity]      = useState<IdentityResultMsg | null>(null);
   const [camConfig,     setCamConfig]     = useState<CameraConfig | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -181,10 +182,23 @@ export default function SurveillanceDashboard() {
           return;
         }
 
-        // ── Part 1 confirmed littering event ─────────────────────────────
+        // ── Real identity result for a confirmed event (face -> pgvector -> violation) ──
+        if (msg.type === "identity_result") {
+          const r = msg as IdentityResultMsg;
+          setIdentity(r);
+          if (r.identity_status === "MATCH") {
+            addLog(`✅ IDENTIFIED ${r.citizen_name} · sim=${((r.similarity ?? 0) * 100).toFixed(1)}% · fine ₹${r.fine_amount} · SMS ${r.sms_status ?? "NOT_CONFIGURED"}`, "match");
+          } else {
+            addLog(`ℹ identity ${r.identity_status}: ${r.reason ?? ""} (no citizen fine)`, r.identity_status === "ERROR" ? "error" : "info");
+          }
+          return;
+        }
+
+        // ── Confirmed littering event ───────────────────────────────────
         if (msg.type === "littering_event") {
           const ev = msg as LitterEvent;
           setLatestEvent(ev);
+          setIdentity(null);
 
           const newBboxes: BBox[] = [
             {
@@ -408,6 +422,7 @@ export default function SurveillanceDashboard() {
           {/* Biometric Panel — PENDING in Part 1 */}
           <BiometricPanel
             match={null}
+            identity={identity}
             running={running}
             pendingEvent={running ? latestEvent : null}
           />

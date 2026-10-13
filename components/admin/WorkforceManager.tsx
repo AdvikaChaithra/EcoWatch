@@ -5,6 +5,7 @@ import { Users, Plus, X, Loader2, CheckCircle2, UserMinus, AlertCircle } from "l
 import { getWorkers, createWorker, supabase } from "@/lib/supabase";
 import { cn, statusColor } from "@/lib/utils";
 import { useEcoStore } from "@/lib/store";
+import { useSectorScope } from "@/hooks/useSectorScope";
 
 interface Worker { id: string; name: string; phone: string; ward: string; employee_id: string; status: string; tasks_completed: number; bonus_accrued: number; eco_points: number; active?: boolean; }
 type WorkerStatus = "All" | "On Duty" | "Off Duty";
@@ -22,11 +23,12 @@ export function WorkforceManager() {
   const [deactivating, setDeactivating] = useState<string | null>(null);
   const [deactivateConfirm, setDeactivateConfirm] = useState<Worker | null>(null);
 
-  useEffect(() => { loadWorkers(); }, []);
+  const { inScope, key: scopeKey, filter: sectorFilter, mySectors } = useSectorScope();
+  useEffect(() => { loadWorkers(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadWorkers() {
     setLoading(true);
-    try { const data = await getWorkers(); setWorkers(data ?? []); setError(""); }
+    try { const data = await getWorkers(); setWorkers((data ?? []).filter((w: any) => inScope(w.sector_id))); setError(""); }
     catch (e) { setError(errMsg(e, "Could not load workers.")); } finally { setLoading(false); }
   }
 
@@ -59,7 +61,8 @@ export function WorkforceManager() {
         employee_id,
         admin_id: user?.id ?? "system",
         pin_hash: "1234", // default PIN
-      });
+        sector_id: sectorFilter !== "all" ? sectorFilter : (mySectors[0]?.id ?? null),
+      } as any);
       setSuccess(`Worker "${form.name}" created! Default PIN: 1234`);
       setForm({ name: "", phone: "", ward: "", employee_id: "" });
       loadWorkers();
