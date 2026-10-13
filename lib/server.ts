@@ -12,7 +12,11 @@ export function serverSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) throw new ConfigError("Supabase environment variables are not configured.");
-  return createClient(url, key, { auth: { persistSession: false } });
+  return createClient(url, key, {
+    auth: { persistSession: false },
+    // Fail fast instead of hanging the login request when the database is unreachable.
+    global: { fetch: (input, init) => fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(8000) }) },
+  });
 }
 
 export function fail(error: string, status: number) {
@@ -23,6 +27,10 @@ export function fail(error: string, status: number) {
 export function serverError(e: unknown, context: string) {
   console.error(`[api:${context}]`, e);
   if (e instanceof ConfigError) return fail(e.message, 503);
+  const text = `${(e as any)?.message ?? ""} ${(e as any)?.details ?? ""}`;
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|timeout|aborted/i.test(text)) {
+    return fail("Cannot reach the database right now. Please try again shortly.", 503);
+  }
   return fail("Something went wrong. Please try again.", 500);
 }
 
