@@ -66,7 +66,8 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
         try {
           const blob     = await (await fetch(cam.capturedImage)).blob();
           const filename = `cleaned/${workerId ?? "worker"}/${Date.now()}.jpg`;
-          const { data: up } = await supabase.storage.from("evidence").upload(filename, blob, { contentType: "image/jpeg" });
+          const { data: up, error: upErr } = await supabase.storage.from("evidence").upload(filename, blob, { contentType: "image/jpeg" });
+          if (upErr) console.warn("[TaskCard] Storage upload failed, using inline image:", upErr.message);
           if (up) {
             const { data: { publicUrl } } = supabase.storage.from("evidence").getPublicUrl(filename);
             imageUrl = publicUrl;
@@ -82,16 +83,8 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
 
         if (updateErr) throw updateErr;
 
-        // Award +100 Eco-Points to worker
-        if (workerId) {
-          const { data: w } = await supabase.from("workers").select("eco_points,tasks_completed").eq("id", workerId).single();
-          if (w) {
-            await supabase.from("workers").update({
-              eco_points:      (w.eco_points ?? 0) + 100,
-              tasks_completed: (w.tasks_completed ?? 0) + 1,
-            }).eq("id", workerId);
-          }
-        }
+        // Points/bonus are credited by the admin on verification (not here), so a rejected
+        // submission that is re-done can't be rewarded twice.
 
         cam.stopCamera();
         setSuccess(true);

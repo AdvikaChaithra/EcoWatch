@@ -27,7 +27,7 @@ export default function AdminAuthPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Invalid credentials."); return; }
       setSuccess(true);
       setCurrentUser({

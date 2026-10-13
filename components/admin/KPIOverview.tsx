@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, DollarSign, TrendingUp, Loader2, Activity, Users, Timer } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -28,6 +29,7 @@ export function KPIOverview() {
   const [kpi, setKPI] = useState<KPIData>({ activeDumps: 0, overdueSLA: 0, finesIssued: 0, finesCollected: 0, wardScore: 72, totalWorkers: 0 });
   const [weekly, setWeekly] = useState<WeeklyPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => { loadKPI(); }, []);
 
@@ -38,13 +40,13 @@ export function KPIOverview() {
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
       const [
-        { count: activeDumps },
-        { count: overdueSLA },
-        { count: finesIssued },
-        { count: finesCollected },
-        { count: totalWorkers },
-        { data: vRows },
-        { data: rRows },
+        { count: activeDumps, error: activeDumpsErr },
+        { count: overdueSLA, error: overdueErr },
+        { count: finesIssued, error: issuedErr },
+        { count: finesCollected, error: collectedErr },
+        { count: totalWorkers, error: workersErr },
+        { data: vRows, error: vErr },
+        { data: rRows, error: rErr },
       ] = await Promise.all([
         supabase.from("dump_reports").select("*", { count: "exact", head: true }).not("status", "eq", "Cleaned & Verified"),
         supabase.from("dump_reports").select("*", { count: "exact", head: true }).lte("created_at", sixHoursAgo).not("status", "eq", "Cleaned & Verified"),
@@ -56,6 +58,12 @@ export function KPIOverview() {
         // FIX 5: Real 7-day dump report timestamps
         supabase.from("dump_reports").select("created_at").gte("created_at", sevenDaysAgo),
       ]);
+
+      const failed = [
+        ["active dumps", activeDumpsErr], ["overdue SLA", overdueErr], ["fines issued", issuedErr],
+        ["fines collected", collectedErr], ["workers", workersErr], ["violations", vErr], ["reports", rErr],
+      ].filter(([, err]) => err);
+      if (failed.length) throw new Error(`failed queries: ${failed.map(([n]) => n).join(", ")}`);
 
       setKPI({
         activeDumps: activeDumps ?? 0,
@@ -74,7 +82,8 @@ export function KPIOverview() {
         reports:    (rRows ?? []).filter((r) => r.created_at?.startsWith(date)).length,
       }));
       setWeekly(weeklyData);
-    } catch { /* defaults */ } finally { setLoading(false); }
+      setError("");
+    } catch (e) { setError(errMsg(e, "Could not load KPIs; figures shown may be incomplete.")); } finally { setLoading(false); }
   }
 
   const CARDS = [
@@ -90,6 +99,7 @@ export function KPIOverview() {
 
   return (
     <div className="space-y-8">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
         {CARDS.map(({ label, value, icon: Icon, color, bg }) => (
           <div key={label} className="kpi-card animate-fade-in-up">

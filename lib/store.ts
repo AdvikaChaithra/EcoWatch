@@ -131,14 +131,18 @@ export const useEcoStore = create<EcoWatchStore>((set, get) => ({
 export async function bootstrapGlobalStats() {
   const store = useEcoStore.getState();
   try {
-    const today = new Date().toISOString().split("T")[0];
-    const [{ count: violations }, { count: reports }, { count: workers }] = await Promise.all([
+    // Start of the user's local day, as an ISO instant (not the UTC date).
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const today = startOfDay.toISOString();
+    const [{ count: violations, error: e1 }, { count: reports, error: e2 }, { count: workers, error: e3 }] = await Promise.all([
       supabase.from("violations").select("*", { count: "exact", head: true }).gte("timestamp", today),
       supabase.from("dump_reports").select("*", { count: "exact", head: true }).not("status", "eq", "Cleaned & Verified"),
       supabase.from("workers").select("*", { count: "exact", head: true }).eq("status", "On Duty"),
     ]);
+    if (e1 || e2 || e3) throw e1 || e2 || e3;
     store.setTotalViolationsToday(violations ?? 0);
     store.setActiveDumpReports(reports ?? 0);
     store.setWorkersOnDuty(workers ?? 0);
-  } catch { /* fail gracefully */ }
+  } catch (e) { console.warn("[EcoWatch] Could not bootstrap global stats:", e); }
 }

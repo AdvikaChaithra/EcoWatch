@@ -1,72 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { serverSupabase, fail, serverError, readJson, extractEmbedding } from "@/lib/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const { name, phone, email, address, ward, gov_id, imageBase64 } = await req.json();
+    const body = await readJson<Record<string, any>>(req);
+    if (!body) return fail("Invalid request body.", 400);
+    const { name, phone, address, ward, gov_id, imageBase64 } = body;
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
 
-    if (!name || !phone) {
-      return NextResponse.json({ success: false, error: "Name and phone are required." }, { status: 400 });
-    }
-    if (!email) {
-      return NextResponse.json({ success: false, error: "Email is required to enable login." }, { status: 400 });
-    }
+    if (!name || !phone) return fail("Name and phone are required.", 400);
+    if (!email) return fail("Email is required to enable login.", 400);
 
-    // ── Check for duplicate phone ─────────────────────────────────────────
-    const { data: existingPhone } = await supabase
-      .from("citizens")
-      .select("id, name")
-      .eq("phone", phone)
-      .maybeSingle();
+    const supabase = serverSupabase();
 
-    if (existingPhone) {
-      return NextResponse.json({ success: false, error: `Phone already registered to ${existingPhone.name}.` }, { status: 409 });
-    }
+    const { data: existingPhone, error: e1 } = await supabase
+      .from("citizens").select("id, name").eq("phone", phone).maybeSingle();
+    if (e1) throw e1;
+    if (existingPhone) return fail(`Phone already registered to ${existingPhone.name}.`, 409);
 
-    // ── Check for duplicate email ─────────────────────────────────────────
-    const { data: existingEmail } = await supabase
-      .from("citizens")
-      .select("id, name")
-      .eq("email", email.trim().toLowerCase())
-      .maybeSingle();
+    const { data: existingEmail, error: e2 } = await supabase
+      .from("citizens").select("id, name").eq("email", email).maybeSingle();
+    if (e2) throw e2;
+    if (existingEmail) return fail(`Email already registered to ${existingEmail.name}. Try logging in instead.`, 409);
 
-    if (existingEmail) {
-      return NextResponse.json({ success: false, error: `Email already registered to ${existingEmail.name}. Try logging in instead.` }, { status: 409 });
-    }
-
-    // ── Extract face embedding via FastAPI ────────────────────────────────
+    // If a photo was supplied, enrollment must succeed — never silently create an
+    // account that can't use face login.
     let faceEmbedding: number[] | null = null;
-
     if (imageBase64) {
-      try {
-        const pyRes = await fetch("http://localhost:8000/api/auth/extract-embedding", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image_base64: imageBase64 }),
-          signal: AbortSignal.timeout(8000),
-        });
-        if (pyRes.ok) {
-          const pyData = await pyRes.json();
-          faceEmbedding = pyData.embedding ?? null;
-        }
-      } catch {
-        // FastAPI offline — register without face embedding (text-only citizen)
+      const result = await extractEmbedding(imageBase64);
+      if (!result.ok) {
+        const status = result.reason === "no_face" ? 422 : result.reason === "offline" ? 503 : 502;
+        return fail(result.message, status);
       }
+      faceEmbedding = result.embedding;
     }
 
-    // ── Insert new citizen ────────────────────────────────────────────────
     const payload: Record<string, any> = {
-      name,
-      phone,
-      email:   email.trim().toLowerCase(),
-      address, ward, gov_id,
+      name, phone, email, address, ward, gov_id,
       eco_points: 0,
-      tier:       "Bronze",
+      tier: "Bronze",
     };
     if (faceEmbedding) payload.face_embedding = faceEmbedding;
 
@@ -75,11 +47,14 @@ export async function POST(req: NextRequest) {
       .insert([payload])
       .select("id, name, phone, email, ward, eco_points, tier")
       .single();
-
-    if (error) throw error;
+    if (error) {
+      // Unique-constraint race between the checks above and the insert.
+      if ((error as any).code === "23505") return fail("Phone or email is already registered.", 409);
+      throw error;
+    }
 
     return NextResponse.json({ success: true, citizen, hasEmbedding: !!faceEmbedding });
-  } catch (e: any) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+  } catch (e) {
+    return serverError(e, "register-face");
   }
 }

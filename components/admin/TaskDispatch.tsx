@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { MapPin, User, Zap, X, CheckCircle2, Loader2, Navigation } from "lucide-react";
 import { getDumpReports, getWorkers, assignWorkerToReport } from "@/lib/supabase";
@@ -12,6 +13,7 @@ export function TaskDispatch() {
   const [reports, setReports] = useState<Report[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selected, setSelected] = useState<Report | null>(null);
   const [dispatching, setDispatching] = useState<string | null>(null);
   const [success, setSuccess] = useState("");
@@ -27,7 +29,8 @@ export function TaskDispatch() {
       ]);
       setReports((rData ?? []).filter((r: Report) => r.status === "Submitted"));
       setWorkers((wData ?? []).filter((w: Worker) => w.status === "On Duty"));
-    } catch {} finally { setLoading(false); }
+      setError("");
+    } catch (e) { setError(errMsg(e, "Could not load reports and workers.")); } finally { setLoading(false); }
   }
 
   const nearestWorkers = (report: Report) =>
@@ -49,6 +52,8 @@ export function TaskDispatch() {
       setSuccess("Worker dispatched successfully!");
       setReports((r) => r.filter((x) => x.id !== reportId));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2000);
+    } catch (e) {
+      setError(errMsg(e, "Could not dispatch the worker. Please try again."));
     } finally { setDispatching(null); }
   }
 
@@ -56,6 +61,7 @@ export function TaskDispatch() {
 
   return (
     <div className="space-y-4">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-display font-bold text-slate-100">Citizen Reports & Task Dispatch</h2>
         <span className="badge bg-orange-500/10 text-orange-400 border-orange-500/20">{reports.length} unassigned</span>

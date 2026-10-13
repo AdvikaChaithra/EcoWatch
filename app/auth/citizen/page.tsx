@@ -265,7 +265,7 @@ function FaceLoginForm({ setCurrentUser, router }: { setCurrentUser: (u: any) =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: captured }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) {
         setError(data.error || "Face not recognized. Please register first.");
         return;
@@ -397,7 +397,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...form, imageBase64: captured ?? null }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Registration failed."); return; }
       setSuccess(true);
       setCurrentUser({

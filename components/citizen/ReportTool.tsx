@@ -72,9 +72,16 @@ export function ReportTool() {
       });
 
       // Award Eco-Points
-      await updateCitizenEcoPoints(user.id, 50);
-      setPointsEarned(true);
-      setSuccess("Report submitted successfully! You've earned +50 Eco-Points 🌿");
+      // The report is already saved; a points failure must not look like a failed submission.
+      try {
+        await updateCitizenEcoPoints(user.id, 50);
+        setPointsEarned(true);
+        setSuccess("Report submitted successfully! You've earned +50 Eco-Points 🌿");
+      } catch (pointsErr) {
+        console.error("[ReportTool] Eco-Points award failed:", pointsErr);
+        setPointsEarned(false);
+        setSuccess("Report submitted successfully! (Eco-Points could not be credited right now.)");
+      }
       cam.clearCapture();
       cam.stopCamera();
     } catch (err: unknown) {

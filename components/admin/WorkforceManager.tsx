@@ -1,17 +1,19 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { Users, Plus, X, Loader2, CheckCircle2, UserMinus, AlertCircle } from "lucide-react";
 import { getWorkers, createWorker, supabase } from "@/lib/supabase";
 import { cn, statusColor } from "@/lib/utils";
 import { useEcoStore } from "@/lib/store";
 
-interface Worker { id: string; name: string; phone: string; ward: string; employee_id: string; status: string; tasks_completed: number; bonus_accrued: number; eco_points: number; }
+interface Worker { id: string; name: string; phone: string; ward: string; employee_id: string; status: string; tasks_completed: number; bonus_accrued: number; eco_points: number; active?: boolean; }
 type WorkerStatus = "All" | "On Duty" | "Off Duty";
 
 export function WorkforceManager() {
   const user = useEcoStore((s) => s.currentUser);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [success, setSuccess] = useState("");
@@ -24,21 +26,24 @@ export function WorkforceManager() {
 
   async function loadWorkers() {
     setLoading(true);
-    try { const data = await getWorkers(); setWorkers(data ?? []); }
-    catch {} finally { setLoading(false); }
+    try { const data = await getWorkers(); setWorkers(data ?? []); setError(""); }
+    catch (e) { setError(errMsg(e, "Could not load workers.")); } finally { setLoading(false); }
   }
 
   async function handleDeactivate(worker: Worker) {
     setDeactivating(worker.id);
     try {
-      await supabase
+      // Mark inactive too, otherwise the worker can still log in (worker-login checks `active`).
+      const { error: updErr } = await supabase
         .from("workers")
-        .update({ status: "Off Duty" })
+        .update({ status: "Off Duty", active: false })
         .eq("id", worker.id);
-      setWorkers((prev) => prev.map((w) => w.id === worker.id ? { ...w, status: "Off Duty" } : w));
+      if (updErr) throw updErr;
+      setWorkers((prev) => prev.map((w) => w.id === worker.id ? { ...w, status: "Off Duty", active: false } : w));
       setDeactivateConfirm(null);
     } catch (e) {
       console.error("Deactivate failed", e);
+      setError(errMsg(e, "Could not deactivate the worker."));
     } finally {
       setDeactivating(null);
     }
@@ -59,6 +64,8 @@ export function WorkforceManager() {
       setForm({ name: "", phone: "", ward: "", employee_id: "" });
       loadWorkers();
       setTimeout(() => { setShowCreate(false); setSuccess(""); }, 3000);
+    } catch (e) {
+      setError(errMsg(e, "Could not create the worker (is the employee ID already in use?)."));
     } finally { setCreating(false); }
   }
 
@@ -68,6 +75,7 @@ export function WorkforceManager() {
 
   return (
     <div className="space-y-4">
+      <ErrorNote message={error} onDismiss={() => setError("")} />
       {/* Deactivate Confirm Modal */}
       {deactivateConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">

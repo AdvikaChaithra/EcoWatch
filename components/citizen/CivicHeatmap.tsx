@@ -26,6 +26,8 @@ export function CivicHeatmap() {
   const [points, setPoints] = useState<ReportPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchError, setSearchError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [activeLayer, setActiveLayer] = useState<"heat" | "markers">("heat");
   const [center, setCenter] = useState<[number, number]>([12.9716, 77.5946]); // Bengaluru default
 
@@ -36,12 +38,14 @@ export function CivicHeatmap() {
   async function loadPoints() {
     setLoading(true);
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("dump_reports")
         .select("lat, lng, severity, category, location_name")
         .not("lat", "is", null);
+      if (error) throw error;
       if (data) setPoints(data);
-    } catch { setPoints([]); }
+      setLoadError("");
+    } catch { setPoints([]); setLoadError("Could not load report locations. The map may be incomplete."); }
     finally { setLoading(false); }
   }
 
@@ -49,13 +53,20 @@ export function CivicHeatmap() {
     if (!searchQuery.trim()) return;
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`,
+        { signal: AbortSignal.timeout(8000) }
       );
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
       const results = await res.json();
       if (results?.[0]) {
         setCenter([parseFloat(results[0].lat), parseFloat(results[0].lon)]);
+        setSearchError("");
+      } else {
+        setSearchError("No matching location found.");
       }
-    } catch {}
+    } catch {
+      setSearchError("Location search is unavailable right now.");
+    }
   };
 
   return (
@@ -94,6 +105,10 @@ export function CivicHeatmap() {
           <Search className="w-4 h-4" />
         </button>
       </div>
+
+      {(searchError || loadError) && (
+        <p role="alert" className="text-xs text-red-300">{searchError || loadError}</p>
+      )}
 
       {/* Map */}
       <div className="map-container h-[500px] relative">

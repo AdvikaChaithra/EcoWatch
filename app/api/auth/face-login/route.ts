@@ -1,75 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { serverSupabase, fail, serverError, readJson, extractEmbedding } from "@/lib/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const { imageBase64 } = await req.json();
-    // imageBase64 is the captured frame from the browser webcam
+    const body = await readJson<{ imageBase64?: string }>(req);
+    const imageBase64 = typeof body?.imageBase64 === "string" ? body.imageBase64 : "";
+    if (!imageBase64) return fail("No image provided.", 400);
 
-    if (!imageBase64) {
-      return NextResponse.json({ success: false, error: "No image provided." }, { status: 400 });
+    const result = await extractEmbedding(imageBase64);
+    if (!result.ok) {
+      if (result.reason === "no_face") return fail(result.message, 422);
+      if (result.reason === "offline") return fail(result.message, 503);
+      return fail(result.message, 502);
     }
 
-    // ── Option A: Extract embedding via Python FastAPI backend ───────────
-    // If the FastAPI backend is running, delegate embedding extraction there.
-    let embedding: number[] | null = null;
+    const supabase = serverSupabase();
+    const { data, error } = await supabase.rpc("match_citizen_face", {
+      query_embedding: result.embedding,
+      match_threshold: 0.7,
+      match_count: 1,
+    });
+    if (error) throw error;
 
-    try {
-      const pyRes = await fetch("http://localhost:8000/api/auth/extract-embedding", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: imageBase64 }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (pyRes.ok) {
-        const pyData = await pyRes.json();
-        embedding = pyData.embedding ?? null;
-      }
-    } catch {
-      // FastAPI offline — will do DB-only lookup (demo mode without embedding)
+    if (!data || data.length === 0) {
+      return fail("Face not recognized. Similarity below threshold.", 401);
     }
-
-    // ── Option B: Query Supabase RPC with embedding (if extracted) ───────
-    if (embedding) {
-      const { data, error } = await supabase.rpc("match_citizen_face", {
-        query_embedding: embedding,
-        match_threshold: 0.70,
-        match_count: 1,
-      });
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        const match = data[0];
-        return NextResponse.json({
-          success: true,
-          citizen: {
-            id:         match.id,
-            name:       match.name,
-            phone:      match.phone,
-            ward:       match.ward,
-            eco_points: match.eco_points,
-            tier:       match.tier,
-            similarity: match.similarity,
-          },
-        });
-      }
-      return NextResponse.json({ success: false, error: "Face not recognized. Similarity below threshold." }, { status: 401 });
-    }
-
-    // ── Demo/Fallback: Return first citizen if no backend running ─────────
-    // Removed: production must have FastAPI backend for real face matching.
+    const match = data[0];
     return NextResponse.json({
-      success: false,
-      error: "Face recognition backend offline. Start backend/main.py and try again.",
-    }, { status: 503 });
-
-  } catch (e: any) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+      success: true,
+      citizen: {
+        id: match.id,
+        name: match.name,
+        phone: match.phone,
+        ward: match.ward,
+        eco_points: match.eco_points,
+        tier: match.tier,
+        similarity: match.similarity,
+      },
+    });
+  } catch (e) {
+    return serverError(e, "face-login");
   }
 }

@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import {
   AlertTriangle, Eye, CreditCard, FileText, Loader2, X,
@@ -140,6 +141,7 @@ export function ViolationHub() {
   const user = useEcoStore((s) => s.currentUser);
   const [violations,    setViolations]    = useState<Violation[]>([]);
   const [loading,       setLoading]       = useState(true);
+  const [loadError,     setLoadError]     = useState("");
   const [selected,      setSelected]      = useState<Violation | null>(null);
   const [modal,         setModal]         = useState<ModalType>(null);
   const [disputeReason, setDisputeReason] = useState("");
@@ -178,9 +180,15 @@ export function ViolationHub() {
     try {
       let q = supabase.from("violations").select("*").order("timestamp", { ascending: false });
       if (user?.id) q = q.eq("citizen_id", user.id);
-      const { data } = await q;
+      const { data, error } = await q;
+      if (error) throw error;
       setViolations(data ?? []);
-    } catch { setViolations([]); } finally { setLoading(false); }
+      setLoadError("");
+    } catch (e) {
+      // An empty list would read as "no fines" — tell the user the load failed instead.
+      setViolations([]);
+      setLoadError(errMsg(e, "Could not load your violations."));
+    } finally { setLoading(false); }
   }
 
   async function handlePayFine() {
@@ -191,14 +199,15 @@ export function ViolationHub() {
       const paidAt = new Date().toISOString();
 
       // FIX 3: Check for Supabase error before treating as success
-      const { error } = await supabase.from("violations").update({
+      const { data: updated, error } = await supabase.from("violations").update({
         status:          "Paid",
         payment_method:  payMethod,
         paid_at:         paidAt,
         transaction_ref: txnRef,
-      }).eq("id", selected.id);
+      }).eq("id", selected.id).neq("status", "Paid").select("id");
 
       if (error) throw error;
+      if (!updated || updated.length === 0) throw new Error("This fine was already paid or is no longer available.");
 
       const receiptData: Receipt = {
         receipt_number:  `MCR-${selected.id.slice(0, 6).toUpperCase()}`,
@@ -227,13 +236,18 @@ export function ViolationHub() {
     if (!selected || !disputeReason) return;
     setActionLoading(true);
     try {
-      await supabase.from("violations").update({
+      const { data: updated, error } = await supabase.from("violations").update({
         status:         "Disputed",
         dispute_reason: disputeReason,
         disputed_at:    new Date().toISOString(),
-      }).eq("id", selected.id);
+      }).eq("id", selected.id).eq("status", "Pending").select("id");
+      if (error) throw error;
+      if (!updated || updated.length === 0) throw new Error("This violation can no longer be disputed.");
       setViolations((v) => v.map((x) => x.id === selected.id ? { ...x, status: "Disputed" } : x));
       setTimeout(() => { setModal(null); setDisputeReason(""); }, 2000);
+    } catch (err: any) {
+      console.error("[ViolationHub] Dispute failed:", err?.message);
+      alert(`Could not submit dispute: ${err?.message ?? "Unknown error"}. Please try again.`);
     } finally { setActionLoading(false); }
   }
 
@@ -246,6 +260,7 @@ export function ViolationHub() {
       {/* Real-time Violation Alert Banner */}
       {newAlert && (
         <div className="mb-4 flex items-start gap-3 p-4 rounded-2xl bg-red-900/90 border border-red-500/40 animate-fade-in-up">
+      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5 animate-pulse" />
           <div>
             <p className="text-xs font-bold text-red-400">📡 LIVE CAMERA DETECTION</p>

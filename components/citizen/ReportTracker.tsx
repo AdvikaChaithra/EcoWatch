@@ -1,4 +1,5 @@
 "use client";
+import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { CheckCircle2, Clock, HardHat, Loader2, ChevronRight, ImageIcon } from "lucide-react";
 import { getDumpReports } from "@/lib/supabase";
@@ -23,6 +24,7 @@ export function ReportTracker() {
   const user = useEcoStore((s) => s.currentUser);
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [selected, setSelected] = useState<Report | null>(null);
   const [sliderPos, setSliderPos] = useState(50);
 
@@ -35,7 +37,8 @@ export function ReportTracker() {
     try {
       const data = await getDumpReports(user?.id);
       setReports(data ?? []);
-    } catch { setReports([]); }
+      setLoadError("");
+    } catch (e) { setReports([]); setLoadError(errMsg(e, "Could not load your reports.")); }
     finally { setLoading(false); }
   }
 
@@ -46,6 +49,7 @@ export function ReportTracker() {
 
   return (
     <div className="space-y-6">
+      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
       <h2 className="text-xl font-display font-bold text-slate-100">My Reports</h2>
 
       {reports.length === 0 ? (
