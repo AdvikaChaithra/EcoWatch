@@ -31,6 +31,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
+# Windows Media Foundation can take ~30 s to open a webcam with hardware transforms on;
+# disabling them makes the camera open in about a second (must be set before importing cv2).
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+# Ultralytics otherwise checks PyPI / sends usage analytics at startup (slow on some networks).
+os.environ.setdefault("YOLO_OFFLINE", "1")
 import cv2
 import httpx
 import numpy as np
@@ -43,7 +48,8 @@ from backend.littering_detector import (
 )
 from backend.telemetry import TelemetryCollector
 
-load_dotenv()
+load_dotenv()                                             # cwd .env
+load_dotenv(Path(__file__).resolve().parent / ".env")     # backend/.env regardless of cwd
 
 # ── Camera ────────────────────────────────────────────────────────────────────
 _SRC          = os.getenv("CAMERA_SOURCE", "0")
@@ -55,7 +61,17 @@ CAMERA_LAT    = float(os.getenv("CAMERA_LATITUDE",  "12.9783"))
 CAMERA_LNG    = float(os.getenv("CAMERA_LONGITUDE", "77.6408"))
 CAMERA_LOC    = os.getenv("CAMERA_LOCATION_NAME", "Test Location")
 CAMERA_WARD   = os.getenv("CAMERA_WARD", "")
-SHOW_WINDOW   = os.getenv("SHOW_WINDOW", "true").lower() == "true"
+SHOW_WINDOW   = os.getenv("SHOW_WINDOW", "false").lower() == "true"   # extra OpenCV window costs CPU
+# Capture size + YOLO input size. 640x480 capture and imgsz=416 run ~6-7 FPS on a laptop CPU
+# (measured: imgsz 640 -> 3.4 FPS, 416 -> 6.5 FPS, 320 -> 10.6 FPS with yolov8n + ByteTrack).
+CAMERA_WIDTH  = int(os.getenv("CAMERA_WIDTH", "640"))
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
+YOLO_IMGSZ    = int(os.getenv("YOLO_IMGSZ", "416"))
+# Webcam driver: auto tries Media Foundation, then DirectShow, then OpenCV's default.
+CAMERA_BACKEND = os.getenv("CAMERA_BACKEND", "auto").lower()
+# A live camera that delivers only black frames this long is reopened (e.g. device contention).
+CAMERA_BLACK_SECONDS = float(os.getenv("CAMERA_BLACK_SECONDS", "3"))
+BLACK_MEAN_LEVEL = 3.0
 
 # ── Models (A6 + dual model) ─────────────────────────────────────────────────
 PERSON_MODEL_PATH = os.getenv("PERSON_MODEL_PATH", "yolov8n.pt")
@@ -285,23 +301,63 @@ class CameraSource:
         self.status   = "STARTING"
         self.width    = 0
         self.height   = 0
+        self.backend  = ""
+        self._last_backend = ""
+        self._is_file = False
+        self._file_frame_dt = 0.0
+
+    def _backends(self) -> List[Tuple[str, Optional[int]]]:
+        if not isinstance(CAMERA_SOURCE, int):
+            return [("default", None)]                     # files / RTSP: let OpenCV choose
+        table = {"msmf": cv2.CAP_MSMF, "dshow": cv2.CAP_DSHOW, "default": None}
+        if CAMERA_BACKEND in table:
+            return [(CAMERA_BACKEND, table[CAMERA_BACKEND])]
+        order = ["msmf", "dshow", "default"] if os.name == "nt" else ["default"]
+        # after a failure, start from the backend after the one that failed
+        if self._last_backend in order:
+            i = order.index(self._last_backend)
+            order = order[i + 1:] + order[:i + 1]
+        return [(n, table[n]) for n in order]
 
     def open(self) -> bool:
-        cap = cv2.VideoCapture(CAMERA_SOURCE)
-        if not cap.isOpened():
-            self.status = "CAMERA_ERROR"
-            return False
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self._is_file = isinstance(CAMERA_SOURCE, str) and not CAMERA_SOURCE.lower().startswith(("rtsp://", "http://", "https://"))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        self._file_frame_dt = 1.0 / fps if (self._is_file and fps and fps > 1) else 0.0
-        self._cap   = cap
-        self.status = "CAMERA_READY"
-        return True
+        for name, api in self._backends():
+            cap = cv2.VideoCapture(CAMERA_SOURCE, api) if api is not None else cv2.VideoCapture(CAMERA_SOURCE)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            if not self._is_file:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)        # always read the newest frame
+            # Validate: a live webcam must deliver a non-black frame within ~1 s.
+            ok_frame = self._is_file or not isinstance(CAMERA_SOURCE, int)
+            for _ in range(20):
+                ret, f = cap.read()
+                if ret and f is not None and float(f.mean()) > BLACK_MEAN_LEVEL:
+                    ok_frame = True
+                    break
+            if not ok_frame:
+                print(f"[Camera] backend={name} opened but delivers black frames - trying next")
+                cap.release()
+                self._saw_black = True
+                continue
+            self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            self._file_frame_dt = 1.0 / fps if (self._is_file and fps and fps > 1) else 0.0
+            self._cap = cap
+            self._last_backend = name
+            self.backend = name
+            self.status = "CAMERA_READY"
+            print(f"[Camera] opened source={CAMERA_SOURCE!r} backend={name} {self.width}x{self.height}")
+            return True
+        self.status = "CAMERA_BLACK" if getattr(self, "_saw_black", False) else "CAMERA_ERROR"
+        self._saw_black = False
+        print("[Camera] could not get usable frames. Is another app (Zoom/Teams/browser) using the "
+              "webcam, or is the privacy shutter closed?")
+        return False
 
     def start(self):
         self._running = True
@@ -317,8 +373,12 @@ class CameraSource:
         fails = 0
         while self._running:
             if not self._cap or not self._cap.isOpened():
-                self.status = "CAMERA_ERROR"
-                time.sleep(1.0)
+                # Keep trying to (re)acquire the camera instead of giving up after one failure.
+                if self.status != "CAMERA_BLACK":
+                    self.status = "CAMERA_ERROR"
+                time.sleep(3.0)
+                if self._running:
+                    self.open()
                 continue
             ret, frame = self._cap.read()
             if self._is_file:
@@ -333,6 +393,22 @@ class CameraSource:
                 time.sleep(0.02)
                 continue
             fails = 0
+            # Black-frame watchdog (live cameras only): reopen instead of silently feeding black.
+            if not self._is_file and float(frame.mean()) <= BLACK_MEAN_LEVEL:
+                now_t = time.time()
+                self._black_since = getattr(self, "_black_since", 0.0) or now_t
+                if now_t - self._black_since > CAMERA_BLACK_SECONDS:
+                    self.status = "CAMERA_BLACK"
+                    print(f"[Camera] black frames for {CAMERA_BLACK_SECONDS:.0f}s on backend={self.backend} - reopening")
+                    self._cap.release()
+                    self._black_since = 0.0
+                    if not self.open():
+                        time.sleep(2.0)
+                    continue
+            else:
+                self._black_since = 0.0
+                if self.status == "CAMERA_BLACK":
+                    self.status = "CAMERA_READY"
             self.tel.record_camera_frame()
             try:
                 self.q.put_nowait(frame)
@@ -612,10 +688,10 @@ class VisionEngine:
             # Warm-up
             dummy = np.zeros((480, 640, 3), dtype=np.uint8)
             all_cls = [PERSON_CLASS_ID] + ([] if DUAL_MODEL else list(TRASH_CLASS_IDS))
-            self.person_model.track(source=dummy, persist=True, verbose=False,
+            self.person_model.track(source=dummy, persist=True, verbose=False, imgsz=YOLO_IMGSZ,
                                     tracker="bytetrack.yaml", classes=all_cls)
             if DUAL_MODEL and self.waste_model:
-                self.waste_model.predict(source=dummy, verbose=False,
+                self.waste_model.predict(source=dummy, verbose=False, imgsz=YOLO_IMGSZ,
                                          classes=list(TRASH_CLASS_IDS))
 
             self._post_status("YOLO_READY",
@@ -699,7 +775,7 @@ class VisionEngine:
         # ── Person detection + tracking (always ByteTrack) ────────────────────
         person_classes = [PERSON_CLASS_ID] if DUAL_MODEL else [PERSON_CLASS_ID] + list(TRASH_CLASS_IDS)
         p_results = self.person_model.track(
-            source=frame, persist=True, tracker="bytetrack.yaml",
+            source=frame, persist=True, tracker="bytetrack.yaml", imgsz=YOLO_IMGSZ,
             verbose=False, classes=person_classes,
         )
 
@@ -729,7 +805,7 @@ class VisionEngine:
         # ── Waste detection: second model path ────────────────────────────────
         if DUAL_MODEL and self.waste_model is not None:
             w_results = self.waste_model.predict(
-                source=frame, verbose=False, classes=list(TRASH_CLASS_IDS),
+                source=frame, verbose=False, imgsz=YOLO_IMGSZ, classes=list(TRASH_CLASS_IDS),
             )
             waste_bboxes: List[Tuple[int,int,int,int]] = []
             if w_results and w_results[0].boxes is not None:
@@ -1015,7 +1091,8 @@ class VisionEngine:
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def run(self):
-        print(f"\n[EcoWatch v5] dual_model={DUAL_MODEL} | SHOW_WINDOW={SHOW_WINDOW}")
+        print(f"\n[EcoWatch v5] dual_model={DUAL_MODEL} | SHOW_WINDOW={SHOW_WINDOW} | "
+              f"capture={CAMERA_WIDTH}x{CAMERA_HEIGHT} | yolo_imgsz={YOLO_IMGSZ}")
         print(f"[EcoWatch v5] waste_classes={sorted(TRASH_CLASS_IDS)}")
 
         if not self._load_models():
@@ -1060,6 +1137,8 @@ class VisionEngine:
                     cv2.imshow(f"EcoWatch v5 — {CAMERA_ID}", display)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
+        except KeyboardInterrupt:
+            print("[EcoWatch v5] Ctrl+C received - shutting down cleanly.")
         finally:
             self._running = False
             self.camera.stop()
@@ -1076,4 +1155,7 @@ def _eucl(a, b) -> float:
 
 
 if __name__ == "__main__":
-    VisionEngine().run()
+    try:
+        VisionEngine().run()
+    except KeyboardInterrupt:
+        print("[EcoWatch v5] Stopped.")

@@ -21,6 +21,8 @@ interface Props {
   bboxes:          BoundingBox[];
   running:         boolean;
   cameraOffline:   boolean;
+  /** Optional human-readable reason shown on the offline screen */
+  offlineReason?:  string;
   cameraId:        string;
   mjpegUrl?:       string;        // A9: from /api/camera/config
   activeMachines?: ActiveMachine[]; // A9: pipeline_state
@@ -42,7 +44,7 @@ const MJPEG_FALLBACK = `http://localhost:8001/stream.mjpg`;
  * No Media Source Extensions or getUserMedia needed.
  */
 export function CameraFeed({
-  bboxes, running, cameraOffline, cameraId, mjpegUrl, activeMachines = [],
+  bboxes, running, cameraOffline, offlineReason, cameraId, mjpegUrl, activeMachines = [],
 }: Props) {
   const canvasRef     = useRef<HTMLCanvasElement>(null);
   const imgRef        = useRef<HTMLImageElement>(null);
@@ -165,11 +167,15 @@ export function CameraFeed({
         <div className="text-center">
           <p className="text-2xl font-mono font-bold text-red-400">CAMERA OFFLINE</p>
           <p className="text-sm text-red-400/60 mt-1 font-mono">{cameraId}</p>
-          <p className="text-xs text-slate-500 mt-3">
-            MJPEG stream not available<br />
-            Check CAMERA_SOURCE in backend/.env<br />
-            and restart vision_engine.py
-          </p>
+          {offlineReason ? (
+            <p className="text-xs text-slate-400 mt-3 max-w-sm mx-auto">{offlineReason}</p>
+          ) : (
+            <p className="text-xs text-slate-500 mt-3">
+              MJPEG stream not available<br />
+              Check CAMERA_SOURCE in backend/.env<br />
+              and restart vision_engine.py
+            </p>
+          )}
         </div>
       </div>
     );

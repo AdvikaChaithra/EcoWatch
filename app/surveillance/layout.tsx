@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useEcoStore } from "@/lib/store";
 import { Camera, Loader2 } from "lucide-react";
@@ -11,6 +11,10 @@ import { Camera, Loader2 } from "lucide-react";
  */
 export default function SurveillanceLayout({ children }: { children: React.ReactNode }) {
   const { currentUser, isAuthenticated } = useEcoStore();
+  // Hydration fix: the saved session is only known in the browser, so render the
+  // same placeholder as the server until mounted.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const router = useRouter();
 
   useEffect(() => {
@@ -20,7 +24,7 @@ export default function SurveillanceLayout({ children }: { children: React.React
     }
   }, [isAuthenticated, currentUser, router]);
 
-  if (!isAuthenticated || !currentUser) {
+  if (!mounted || !isAuthenticated || !currentUser) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <Camera className="w-12 h-12 text-red-400/40" />

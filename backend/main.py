@@ -8,6 +8,7 @@ EcoWatch FastAPI — main.py  (v5)
 """
 from pathlib import Path
 import asyncio
+import logging
 import os
 import json
 import threading
@@ -22,6 +23,16 @@ from backend.routers import auth, violations, reports, workers
 from backend import identity
 
 app = FastAPI(title="EcoWatch API", version="5.0.0", docs_url="/api/docs")
+
+
+class _QuietHeartbeat(logging.Filter):
+    """The engine posts telemetry/pipeline state several times a second; keep those
+    out of the access log so real requests (events, logins, reports) stay readable."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/vision/" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHeartbeat())
 
 # Serve evidence frames + event.json written by EvidenceWriter (item 2)
 _EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "evidence_snapshots"))

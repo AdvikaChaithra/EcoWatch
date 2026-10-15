@@ -70,7 +70,7 @@ interface CameraConfig {
 type BootStage =
   | "OFFLINE" | "STARTING" | "YOLO_READY" | "CAMERA_READY"
   | "TRACKER_READY" | "EVENT_ENGINE_READY" | "SYSTEM_READY"
-  | "CAMERA_ERROR" | "YOLO_ERROR";
+  | "CAMERA_ERROR" | "CAMERA_BLACK" | "YOLO_ERROR";
 
 const STAGE_COLOR: Record<string, string> = {
   OFFLINE:            "text-slate-500",
@@ -81,6 +81,7 @@ const STAGE_COLOR: Record<string, string> = {
   EVENT_ENGINE_READY: "text-blue-400",
   SYSTEM_READY:       "text-eco-400",
   CAMERA_ERROR:       "text-red-400",
+  CAMERA_BLACK:       "text-red-400",
   YOLO_ERROR:         "text-red-400",
 };
 
@@ -172,7 +173,13 @@ export default function SurveillanceDashboard() {
             camera_status:        msg.camera_status,
             camera_resolution:    msg.camera_resolution,
           });
-          if (msg.camera_status === "CAMERA_ERROR") setBootStage("CAMERA_ERROR");
+          if (msg.camera_status === "CAMERA_ERROR" || msg.camera_status === "CAMERA_BLACK") {
+            setBootStage(msg.camera_status);
+          } else if (msg.camera_status === "CAMERA_READY" && (msg.camera_fps ?? 0) > 0) {
+            // Engine was already running before this page opened (boot messages were missed),
+            // or the camera recovered: live telemetry proves the pipeline is up.
+            setBootStage((s) => (s === "OFFLINE" || s === "CAMERA_ERROR" || s === "CAMERA_BLACK") ? "SYSTEM_READY" : s);
+          }
           return;
         }
 
@@ -370,7 +377,10 @@ export default function SurveillanceDashboard() {
             <CameraFeed
               bboxes={running ? bboxes : []}
               running={running}
-              cameraOffline={health.camera_status === "CAMERA_ERROR" || bootStage === "CAMERA_ERROR"}
+              cameraOffline={["CAMERA_ERROR", "CAMERA_BLACK"].includes(health.camera_status ?? "") || bootStage === "CAMERA_ERROR" || bootStage === "CAMERA_BLACK"}
+              offlineReason={(health.camera_status === "CAMERA_BLACK" || bootStage === "CAMERA_BLACK")
+                ? "The webcam is sending only black frames. Check the lens/privacy shutter and lighting, and close other apps using the camera (Teams, Zoom, Camera app, browser tabs). The engine retries automatically."
+                : undefined}
               cameraId={camConfig?.camera_id ?? "CAM_01"}
               mjpegUrl={camConfig?.mjpeg_url}
               activeMachines={running ? activeMachines : []}
