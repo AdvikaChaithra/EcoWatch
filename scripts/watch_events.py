@@ -38,9 +38,11 @@ async def main():
                             + (f" {round(a['dwell_progress'] * 100)}%" if a.get("dwell_progress") else "")
                             for a in m.get("active_machines", [])
                         )
-                        if dets != last_dets:
+                        # print only when the SET of tracked objects changes, not on confidence jitter
+                        key = sorted((d["kind"], d["track_id"]) for d in m.get("detections", []))
+                        if key != last_dets:
                             print(f"[{ts()}] sees: {dets}", flush=True)
-                            last_dets = dets
+                            last_dets = key
                         if states and states != last_states:
                             print(f"[{ts()}]   stage: {states}", flush=True)
                         last_states = states
