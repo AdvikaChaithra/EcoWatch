@@ -5,6 +5,7 @@ import { useEcoStore } from "@/lib/store";
 import { CameraFeed } from "@/components/surveillance/CameraFeed";
 import { BiometricPanel, type IdentityResultMsg } from "@/components/surveillance/BiometricPanel";
 import { PenaltyTerminal, LogEntry } from "@/components/surveillance/PenaltyTerminal";
+import { LiveDetections, type LiveDetection } from "@/components/surveillance/LiveDetections";
 import { cn } from "@/lib/utils";
 
 const WS_URL    = process.env.NEXT_PUBLIC_WS_URL    ?? "ws://localhost:8000/ws/alerts";
@@ -105,6 +106,8 @@ export default function SurveillanceDashboard() {
   const [litterEvents,  setLitterEvents]  = useState<LitterEvent[]>([]);
   const [latestEvent,   setLatestEvent]   = useState<LitterEvent | null>(null);
   const [identity,      setIdentity]      = useState<IdentityResultMsg | null>(null);
+  const [identities,    setIdentities]    = useState<Record<string, IdentityResultMsg>>({});
+  const [liveDet,       setLiveDet]       = useState<{ detections: LiveDetection[]; ts: number | null }>({ detections: [], ts: null });
   const [camConfig,     setCamConfig]     = useState<CameraConfig | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -186,6 +189,7 @@ export default function SurveillanceDashboard() {
         // ── A9: Pipeline state (5 Hz, no images) ─────────────────────────
         if (msg.type === "pipeline_state") {
           setActiveMachines(msg.active_machines ?? []);
+          setLiveDet({ detections: msg.detections ?? [], ts: typeof msg.timestamp === "number" ? msg.timestamp : null });
           return;
         }
 
@@ -193,6 +197,7 @@ export default function SurveillanceDashboard() {
         if (msg.type === "identity_result") {
           const r = msg as IdentityResultMsg;
           setIdentity(r);
+          setIdentities((m) => ({ ...m, [r.event_id]: r }));
           if (r.identity_status === "MATCH") {
             addLog(`✅ IDENTIFIED ${r.citizen_name} · sim=${((r.similarity ?? 0) * 100).toFixed(1)}% · fine ₹${r.fine_amount} · SMS ${r.sms_status ?? "NOT_CONFIGURED"}`, "match");
           } else {
@@ -488,11 +493,19 @@ export default function SurveillanceDashboard() {
             </div>
           )}
 
-          {/* Littering Events List */}
+          {/* Live YOLO + ByteTrack detections (data only, ~5 Hz) */}
+          <LiveDetections
+            running={running}
+            detections={liveDet.detections}
+            machines={activeMachines}
+            timestamp={liveDet.ts}
+          />
+
+          {/* Confirmed littering events */}
           <div className="glass-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Detections
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Littering Events
               </p>
               <button onClick={() => setLitterEvents([])}
                       className="p-1 rounded-md hover:bg-white/5 text-slate-500">
@@ -526,9 +539,18 @@ export default function SurveillanceDashboard() {
                       <p className="text-[9px] text-slate-600">
                         {new Date(ev.timestamp).toLocaleTimeString()}
                       </p>
-                      <span className="badge text-[8px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20 ml-auto">
-                        IDENTITY PENDING
-                      </span>
+                      {(() => {
+                        const idr = identities[ev.event_id];
+                        const status: string = idr?.identity_status ?? "IDENTIFYING";
+                        const tone = status === "MATCH" ? "bg-red-500/10 text-red-400 border-red-500/20"
+                          : status === "IDENTIFYING" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                          : "bg-slate-500/10 text-slate-400 border-slate-500/20";
+                        return (
+                          <span className={cn("badge text-[8px] ml-auto", tone)}>
+                            {status === "MATCH" ? `MATCHED · fine ₹${idr?.fine_amount ?? ""}` : status}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))}

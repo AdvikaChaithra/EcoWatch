@@ -793,12 +793,13 @@ class VisionEngine:
                 cx, cy = (x1+x2)//2, (y1+y2)//2
                 if cls == PERSON_CLASS_ID and conf >= PERSON_CONF:
                     ph = max(y2-y1, 10)
-                    persons.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy), "ph": ph})
+                    persons.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy), "ph": ph, "conf": conf})
                     cv2.rectangle(display, (x1,y1),(x2,y2), (0,255,255), 2)
                     cv2.putText(display, f"P#{tid} {conf:.2f}", (x1,y1-6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,255), 1)
                 elif not DUAL_MODEL and cls in TRASH_CLASS_IDS and conf >= TRASH_CONF:
-                    raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy)})
+                    raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy),
+                                       "conf": conf, "label": self.person_model.names.get(cls, str(cls))})
 
         self._update_person_history(persons, now)
 
@@ -927,7 +928,7 @@ class VisionEngine:
             self._handle_event(result, (pid, wid), now)
 
         self._prune_pool(now)
-        self._update_pipeline_state(persons, wastes, now)
+        self._update_pipeline_state(persons, wastes, now, fw, fh)
 
         # Zone overlays
         for poly in self.zones.get_zones_for_overlay()["bin_zones"]:
@@ -969,15 +970,32 @@ class VisionEngine:
             bar_w = int((x2-x1) * sm.dwell_progress)
             cv2.rectangle(display, (x1, y2+2), (x1+bar_w, min(y2+7, fh-1)), (255,140,0), -1)
 
-    def _update_pipeline_state(self, persons, wastes, now: float):
+    def _update_pipeline_state(self, persons, wastes, now: float, fw: int = 0, fh: int = 0):
         active = [{"person_id": pid, "waste_id": wid,
                    "state": sm.state.value, "dwell_progress": round(sm.dwell_progress, 2)}
                   for (pid, wid), sm in self._sm_pool.items()]
+
+        def _norm(b):  # pixel bbox -> 0..1 so the UI can draw it at any size
+            if not fw or not fh:
+                return list(b)
+            return [round(b[0] / fw, 4), round(b[1] / fh, 4), round(b[2] / fw, 4), round(b[3] / fh, 4)]
+
+        # Live detections of THIS frame (real YOLO + ByteTrack output; no images over WS).
+        detections = [
+            {"kind": "person", "track_id": p["id"], "label": "person",
+             "conf": round(p.get("conf", 0.0), 3), "bbox": _norm(p["bbox"])}
+            for p in persons[:15]
+        ] + [
+            {"kind": "waste", "track_id": w["id"], "label": w.get("label", "waste"),
+             "conf": round(w["conf"], 3) if w.get("conf") is not None else None, "bbox": _norm(w["bbox"])}
+            for w in wastes[:15]
+        ]
         with self._pipeline_lock:
             self._pipeline_state = {
                 "type": "pipeline_state", "camera_id": CAMERA_ID,
                 "timestamp": now, "person_count": len(persons),
                 "waste_count": len(wastes), "active_machines": active,
+                "detections": detections,
             }
 
     def _update_person_history(self, persons: List[dict], now: float):
