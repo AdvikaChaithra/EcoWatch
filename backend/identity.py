@@ -24,8 +24,11 @@ import numpy as np
 from backend.security import send_sms, utcnow_iso
 
 # ── Configuration ────────────────────────────────────────────────────────────
-FACE_MATCH_THRESHOLD   = float(os.getenv("FACE_MATCH_THRESHOLD", "0.50"))   # cosine similarity for MATCH
-FACE_REVIEW_THRESHOLD  = float(os.getenv("FACE_REVIEW_THRESHOLD", "0.38"))  # below this: NO_MATCH, between: UNCERTAIN
+# Calibrated on this webcam: enrolled user vs. own evidence frame = 0.575 (2026-10-18 rehearsal);
+# ArcFace (buffalo_l) different-person similarity is typically < 0.3. A clear margin over the
+# runner-up is also required (FACE_MATCH_MARGIN), so 0.45 is not a loose match.
+FACE_MATCH_THRESHOLD   = float(os.getenv("FACE_MATCH_THRESHOLD", "0.45"))   # cosine similarity for MATCH
+FACE_REVIEW_THRESHOLD  = float(os.getenv("FACE_REVIEW_THRESHOLD", "0.32"))  # below this: NO_MATCH, between: UNCERTAIN
 FACE_MATCH_MARGIN      = float(os.getenv("FACE_MATCH_MARGIN", "0.08"))      # top1 - top2 gap required
 FACE_MIN_PX            = int(os.getenv("FACE_MIN_PX", "70"))                # min face width in pixels
 FACE_MIN_DET_SCORE     = float(os.getenv("FACE_MIN_DET_SCORE", "0.60"))
