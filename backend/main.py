@@ -21,6 +21,8 @@ from backend.security import safe_equal, send_sms
 from backend.models import VisionStatus, NodeHealth, LitteringEventPayload
 from backend.routers import auth, violations, reports, workers
 from backend import identity
+from backend import camera_location
+from backend.security import utcnow_iso
 
 app = FastAPI(title="EcoWatch API", version="5.0.0", docs_url="/api/docs")
 
@@ -231,6 +233,12 @@ async def littering_event(payload: LitteringEventPayload,
     _verify_engine_key(x_engine_api_key)
     manager = get_ws_manager()
     event_dict = payload.model_dump()
+    # The incident location is the camera's registered REAL location (set from device GPS).
+    loc = camera_location.get_location()
+    if loc.get("latitude") is not None:
+        event_dict["location"] = {"name": loc.get("name") or event_dict["location"].get("name"),
+                                  "latitude": loc["latitude"], "longitude": loc["longitude"],
+                                  "ward": loc.get("ward", "")}
     crops = event_dict.pop("face_crops", None) or []
     event_dict.pop("snapshot_b64", None)   # never relay images over WS (A9)
     await manager.broadcast(event_dict)
@@ -245,16 +253,36 @@ async def littering_event(payload: LitteringEventPayload,
 
 @app.get("/api/camera/config")
 async def camera_config():
-    """Returns camera metadata from env vars for the UI."""
+    """Camera metadata for the UI. Location = registered real location (device GPS) or .env."""
+    loc = camera_location.get_location()
     return {
         "camera_id":     os.getenv("CAMERA_ID", "CAM_01"),
         "camera_name":   os.getenv("CAMERA_NAME", "EcoWatch Test Camera"),
-        "latitude":      os.getenv("CAMERA_LATITUDE", ""),
-        "longitude":     os.getenv("CAMERA_LONGITUDE", ""),
-        "location_name": os.getenv("CAMERA_LOCATION_NAME", ""),
-        "ward":          os.getenv("CAMERA_WARD", ""),
+        "latitude":      "" if loc.get("latitude") is None else str(loc["latitude"]),
+        "longitude":     "" if loc.get("longitude") is None else str(loc["longitude"]),
+        "location_name": loc.get("name", ""),
+        "ward":          loc.get("ward", ""),
+        "accuracy_m":    loc.get("accuracy_m"),
+        "location_source": loc.get("source"),
         "mjpeg_url":     os.getenv("MJPEG_PUBLIC_URL") or f"http://localhost:{os.getenv('MJPEG_PORT','8001')}/stream.mjpg",
     }
+
+
+@app.post("/api/camera/location")
+async def set_camera_location(body: dict):
+    """Register the camera's real location (sent from the surveillance page using device GPS)."""
+    try:
+        lat = float(body["latitude"]); lng = float(body["longitude"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="latitude and longitude are required numbers")
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="latitude/longitude out of range")
+    name = str(body.get("name") or f"{lat:.5f}, {lng:.5f}")
+    acc = body.get("accuracy_m")
+    saved = camera_location.set_location(name, lat, lng, str(body.get("ward") or ""),
+                                         float(acc) if acc is not None else None, utcnow_iso())
+    print(f"[Camera] location registered: {saved['name']} ({lat:.6f}, {lng:.6f}) +/-{saved['accuracy_m']}m")
+    return saved
 
 
 # ─── Civic Index ─────────────────────────────────────────────────────────────

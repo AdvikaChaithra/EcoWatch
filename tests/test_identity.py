@@ -98,6 +98,27 @@ def test_unidentified_event_has_no_citizen_and_no_fine():
     assert "notifications" not in sb.db
 
 
+class _Chain:
+    """Minimal fake for sb.table(...).select().eq().order().limit().execute() (TEST FIXTURE)."""
+    def __init__(self, rows): self.rows = rows
+    def __getattr__(self, _n): return lambda *a, **k: self
+    def execute(self): return _Res(self.rows)
+
+
+class _MsgSB:
+    def __init__(self, used): self.used = used
+    def table(self, _name): return _Chain([{"awareness_message": m} for m in self.used])
+
+
+def test_awareness_message_differs_for_each_violation():
+    seen = []
+    for _ in range(len(I.AWARENESS_MESSAGES)):
+        m = I.pick_awareness_message(_MsgSB(list(reversed(seen))), "CIT-1")
+        assert m not in seen, "message repeated before all were used"
+        seen.append(m)
+    assert all(m.count("•") == 2 for m in I.AWARENESS_MESSAGES), "each message must be 2 short points"
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0
