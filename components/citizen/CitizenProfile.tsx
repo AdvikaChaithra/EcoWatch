@@ -13,7 +13,7 @@ interface Profile {
 }
 
 const COLS = "id,name,phone,email,address,ward,gov_id,eco_points,tier,created_at,face_enrolled,face_consent_at";
-const PHONE_RE = /^\+?[0-9]{10,13}$/;
+const PHONE_RE = /^\+?[0-9]{8,15}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 function maskId(id: string | null) {
@@ -52,7 +52,7 @@ export function CitizenProfile() {
     if (!p || !user) return;
     const phone = form.phone.replace(/[\s-]/g, "");
     const email = form.email.trim().toLowerCase();
-    if (!PHONE_RE.test(phone)) { setError("Enter a valid phone number (10-13 digits, optional +country code)."); return; }
+    if (!PHONE_RE.test(phone)) { setError("Enter a valid phone number (8-15 digits, optional +country code)."); return; }
     if (!EMAIL_RE.test(email)) { setError("Enter a valid email address."); return; }
     setSaving(true); setError(""); setOk("");
     try {

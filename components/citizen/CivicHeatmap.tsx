@@ -42,7 +42,8 @@ export function CivicHeatmap() {
       const { data, error } = await supabase
         .from("dump_reports")
         .select("lat, lng, severity, category, location_name")
-        .not("lat", "is", null);
+        .not("lat", "is", null)
+        .neq("status", "Cleaned & Verified"); // map shows active (uncleaned) dumps only
       if (error) throw error;
       if (data) setPoints(data);
       setLoadError("");
