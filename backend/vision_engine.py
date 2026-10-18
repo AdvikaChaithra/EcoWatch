@@ -102,7 +102,9 @@ LITTER_CFG = LitteringConfig(
     audit_log_path           = os.getenv("AUDIT_LOG_PATH", "logs/littering_candidates.jsonl"),
 )
 
-EVIDENCE_PRE_SECONDS = float(os.getenv("EVIDENCE_PRE_SECONDS", "4.0"))
+# 8 s so the frames where the person faced the camera while holding the item are still
+# buffered when the event is confirmed (drop -> leave -> 2 s dwell happens after that).
+EVIDENCE_PRE_SECONDS = float(os.getenv("EVIDENCE_PRE_SECONDS", "8.0"))
 EVIDENCE_DIR         = Path(os.getenv("EVIDENCE_DIR", "evidence_snapshots"))
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 Path("logs").mkdir(exist_ok=True)
