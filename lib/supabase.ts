@@ -98,7 +98,7 @@ export async function createViolation(payload: {
     .insert([
       {
         ...payload,
-        fine_amount: 200,
+        fine_amount: 500,
         status: "Pending",
         timestamp: new Date().toISOString(),
       },

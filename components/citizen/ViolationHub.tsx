@@ -289,13 +289,27 @@ export function ViolationHub() {
             <table className="civic-table">
               <thead className="bg-civic-900/80">
                 <tr>
-                  <th>Violation ID</th><th>Date & Time</th><th>Location</th>
+                  <th>Evidence</th><th>Violation ID</th><th>Date & Time</th><th>Location</th>
                   <th>Fine</th><th>AI Confidence</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {violations.map((v) => (
                   <tr key={v.id}>
+                    <td>
+                      {v.snapshot_url ? (
+                        <button
+                          onClick={() => { setSelected(v); setModal("snapshot"); }}
+                          title="View camera evidence (3 frames)"
+                          className="block w-20 h-12 rounded-md overflow-hidden border border-white/10 hover:border-eco-400/60"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={v.snapshot_url} alt="Camera evidence" className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-600">—</span>
+                      )}
+                    </td>
                     <td className="font-mono text-xs text-slate-400">{v.id.slice(0, 8).toUpperCase()}</td>
                     <td className="text-xs">{formatDateTime(v.timestamp)}</td>
                     <td className="max-w-48 truncate text-xs">{v.location_name}</td>
@@ -372,7 +386,7 @@ export function ViolationHub() {
                     { label: "Location",      value: selected.location_name },
                     { label: "Captured",      value: formatDateTime(selected.timestamp) },
                     { label: "AI Confidence", value: `${(selected.confidence_score ?? 0).toFixed(1)}%` },
-                    { label: "Fine Amount",   value: formatCurrency(selected.fine_amount ?? 200) },
+                    { label: "Fine Amount",   value: formatCurrency(selected.fine_amount ?? 0) },
                   ].map(({ label, value }) => (
                     <div key={label} className="glass-card-sm p-3">
                       <p className="text-xs text-slate-400">{label}</p>

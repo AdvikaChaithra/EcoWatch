@@ -78,7 +78,13 @@ PERSON_MODEL_PATH = os.getenv("PERSON_MODEL_PATH", "yolov8n.pt")
 WASTE_MODEL_PATH  = os.getenv("WASTE_MODEL_PATH",  "yolov8n.pt")
 DUAL_MODEL        = WASTE_MODEL_PATH != PERSON_MODEL_PATH
 
-_raw_ids        = os.getenv("WASTE_CLASS_IDS", "39,41")
+# COCO classes treated as potential litter (yolov8n is COCO-trained; it has NO class for
+# wrappers / plastic bags / loose paper - those need a litter-trained model, e.g. TACO).
+#   26 handbag (closest to a dumped bag) | 39 bottle 40 wine glass 41 cup 45 bowl
+#   42 fork 43 knife 44 spoon | 46 banana 47 apple 48 sandwich 49 orange 51 carrot
+#   52 hot dog 53 pizza 54 donut 55 cake | 73 book (paper / notebook)
+_DEFAULT_WASTE_IDS = "26,39,40,41,42,43,44,45,46,47,48,49,51,52,53,54,55,73"
+_raw_ids        = os.getenv("WASTE_CLASS_IDS", _DEFAULT_WASTE_IDS)
 TRASH_CLASS_IDS = set(int(x.strip()) for x in _raw_ids.split(",") if x.strip().isdigit())
 PERSON_CLASS_ID = 0
 

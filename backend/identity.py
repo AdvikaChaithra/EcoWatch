@@ -31,7 +31,7 @@ FACE_MIN_PX            = int(os.getenv("FACE_MIN_PX", "70"))                # mi
 FACE_MIN_DET_SCORE     = float(os.getenv("FACE_MIN_DET_SCORE", "0.60"))
 FACE_MIN_BLUR_VAR      = float(os.getenv("FACE_MIN_BLUR_VAR", "25"))        # Laplacian variance of face region
 FACE_MAX_YAW_DEG       = float(os.getenv("FACE_MAX_YAW_DEG", "50"))
-FINE_AMOUNT            = float(os.getenv("LITTERING_FINE_AMOUNT", "200"))
+FINE_AMOUNT            = float(os.getenv("LITTERING_FINE_AMOUNT", "500"))
 PUBLIC_BACKEND_URL     = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000")
 CAMERA_SECTOR_ID       = os.getenv("CAMERA_SECTOR_ID", "")
 
