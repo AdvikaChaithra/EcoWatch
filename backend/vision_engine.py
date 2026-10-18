@@ -83,7 +83,9 @@ TRASH_CLASS_IDS = set(int(x.strip()) for x in _raw_ids.split(",") if x.strip().i
 PERSON_CLASS_ID = 0
 
 PERSON_CONF = float(os.getenv("PERSON_CONF_THRESHOLD", "0.55"))
-TRASH_CONF  = float(os.getenv("TRASH_CONF_THRESHOLD",  "0.40"))
+# Bottles/cups are small for yolov8n at desk distance: 0.25 keeps them tracked frame-to-frame
+# (only waste classes are used, so false alarms stay low).
+TRASH_CONF  = float(os.getenv("TRASH_CONF_THRESHOLD",  "0.25"))
 
 # ── Littering config ──────────────────────────────────────────────────────────
 LITTER_CFG = LitteringConfig(
@@ -97,6 +99,7 @@ LITTER_CFG = LitteringConfig(
     timeout_seconds          = float(os.getenv("STATE_MACHINE_TIMEOUT_SECONDS",    "60")),
     cooldown_seconds         = float(os.getenv("VIOLATION_EVENT_COOLDOWN_SECONDS", "30")),
     grace_seconds            = float(os.getenv("TRACK_LOST_GRACE_SECONDS",         "0.7")),
+    waste_grace_seconds      = float(os.getenv("WASTE_LOST_GRACE_SECONDS",         "2.5")),
     carry_comotion_threshold = float(os.getenv("CARRY_COMOTION_THRESHOLD",         "0.4")),
     born_in_hand_window_s    = float(os.getenv("BORN_IN_HAND_WINDOW_S",            "1.0")),
     audit_log_path           = os.getenv("AUDIT_LOG_PATH", "logs/littering_candidates.jsonl"),
