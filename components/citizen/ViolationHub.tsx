@@ -16,6 +16,7 @@ interface Violation {
   confidence_score: number; dispute_reason?: string;
   person_bbox?: number[] | null;
   evidence_path?: string | null; face_similarity?: number | null; identity_status?: string;
+  awareness_message?: string | null; lat?: number | null; lng?: number | null;
   trash_bbox?:  number[] | null;
   // Payment fields — populated after payment is made
   payment_method?: string; paid_at?: string; transaction_ref?: string;
@@ -150,7 +151,7 @@ export function ViolationHub() {
   const [actionLoading, setActionLoading] = useState(false);
   const [payMethod,     setPayMethod]     = useState("UPI / GPay");
   const [receipt,       setReceipt]       = useState<Receipt | null>(null);
-  const [newAlert,      setNewAlert]      = useState<string | null>(null);
+  const [newAlert,      setNewAlert]      = useState<{ text: string; awareness?: string | null } | null>(null);
 
   // Initial load
   useEffect(() => { loadViolations(); }, [user]); // eslint-disable-line
@@ -167,8 +168,11 @@ export function ViolationHub() {
           // Only show citizen's own violations (or all if no user filter)
           if (!user?.id || newVio.citizen_id === user.id) {
             setViolations((prev) => [newVio, ...prev]);
-            setNewAlert(`New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`);
-            setTimeout(() => setNewAlert(null), 6000);
+            setNewAlert({
+              text: `New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`,
+              awareness: newVio.awareness_message,
+            });
+            setTimeout(() => setNewAlert(null), 20000);
           }
         }
       )
@@ -260,14 +264,18 @@ export function ViolationHub() {
   return (
     <>
       {/* Real-time Violation Alert Banner */}
+      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
       {newAlert && (
         <div className="mb-4 flex items-start gap-3 p-4 rounded-2xl bg-red-900/90 border border-red-500/40 animate-fade-in-up">
-      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5 animate-pulse" />
-          <div>
+          <div className="flex-1">
             <p className="text-xs font-bold text-red-400">📡 LIVE CAMERA DETECTION</p>
-            <p className="text-sm text-red-200 mt-0.5">{newAlert}</p>
+            <p className="text-sm text-red-200 mt-0.5">{newAlert.text}</p>
+            {newAlert.awareness && (
+              <div className="mt-2 text-xs text-red-100/90 whitespace-pre-line leading-relaxed">{newAlert.awareness}</div>
+            )}
           </div>
+          <button onClick={() => setNewAlert(null)} className="text-red-300 hover:text-white" aria-label="Dismiss alert"><X className="w-4 h-4" /></button>
         </div>
       )}
       <div className="space-y-4">
@@ -384,6 +392,7 @@ export function ViolationHub() {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   {[
                     { label: "Location",      value: selected.location_name },
+                    { label: "Coordinates",   value: selected.lat != null && selected.lng != null ? `${Number(selected.lat).toFixed(6)}, ${Number(selected.lng).toFixed(6)}` : "—" },
                     { label: "Captured",      value: formatDateTime(selected.timestamp) },
                     { label: "AI Confidence", value: `${(selected.confidence_score ?? 0).toFixed(1)}%` },
                     { label: "Fine Amount",   value: formatCurrency(selected.fine_amount ?? 0) },
@@ -394,6 +403,12 @@ export function ViolationHub() {
                     </div>
                   ))}
                 </div>
+                {selected.awareness_message && (
+                  <div className="rounded-xl border border-eco-500/30 bg-eco-500/10 p-3">
+                    <p className="text-xs font-semibold text-eco-300 mb-1">🌱 Why this matters</p>
+                    <p className="text-xs text-slate-200 whitespace-pre-line leading-relaxed">{selected.awareness_message}</p>
+                  </div>
+                )}
               </div>
             )}
 

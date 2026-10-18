@@ -6,6 +6,7 @@ import { CameraFeed } from "@/components/surveillance/CameraFeed";
 import { BiometricPanel, type IdentityResultMsg } from "@/components/surveillance/BiometricPanel";
 import { PenaltyTerminal, LogEntry } from "@/components/surveillance/PenaltyTerminal";
 import { LiveDetections, type LiveDetection } from "@/components/surveillance/LiveDetections";
+import { getBestPosition, reverseGeocode } from "@/lib/geo";
 import { cn } from "@/lib/utils";
 
 const WS_URL    = process.env.NEXT_PUBLIC_WS_URL    ?? "ws://localhost:8000/ws/alerts";
@@ -65,6 +66,7 @@ interface CameraConfig {
   camera_id: string; camera_name: string;
   latitude: string; longitude: string;
   location_name: string; ward: string;
+  accuracy_m?: number | null; location_source?: string;
   mjpeg_url?: string;                // A9: from /api/camera/config
 }
 
@@ -109,6 +111,28 @@ export default function SurveillanceDashboard() {
   const [identities,    setIdentities]    = useState<Record<string, IdentityResultMsg>>({});
   const [liveDet,       setLiveDet]       = useState<{ detections: LiveDetection[]; ts: number | null }>({ detections: [], ts: null });
   const [camConfig,     setCamConfig]     = useState<CameraConfig | null>(null);
+  const [locBusy,       setLocBusy]       = useState(false);
+  const [locMsg,        setLocMsg]        = useState("");
+
+  // Register the camera's REAL location from this device's GPS (the incident location for violations)
+  const registerCameraLocation = async () => {
+    setLocBusy(true); setLocMsg("Getting the most accurate GPS fix (up to 15 s)…");
+    try {
+      const fix = await getBestPosition(50, 15000);
+      const place = await reverseGeocode(fix.lat, fix.lng);
+      const res = await fetch(`${BACKEND}/api/camera/location`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ latitude: fix.lat, longitude: fix.lng, accuracy_m: fix.accuracy, name: place.name, ward: place.ward }),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.detail ?? `HTTP ${res.status}`);
+      setCamConfig((c) => c ? { ...c, latitude: String(saved.latitude), longitude: String(saved.longitude),
+        location_name: saved.name, ward: saved.ward, accuracy_m: saved.accuracy_m, location_source: saved.source } : c);
+      setLocMsg(`Camera location saved (±${Math.round(fix.accuracy)} m). New violations will use it.`);
+    } catch (e: any) {
+      setLocMsg(`Could not set location: ${e?.message ?? e}`);
+    } finally { setLocBusy(false); }
+  };
 
   const wsRef = useRef<WebSocket | null>(null);
   const addLiveAlert = useEcoStore((s) => s.addLiveAlert);
@@ -354,6 +378,16 @@ export default function SurveillanceDashboard() {
             </span>
           )}
           {camConfig.ward && <span>{camConfig.ward}</span>}
+          {camConfig.latitude && (
+            <span className="font-mono">{Number(camConfig.latitude).toFixed(5)}, {Number(camConfig.longitude).toFixed(5)}
+              {camConfig.accuracy_m != null && ` ±${Math.round(camConfig.accuracy_m)}m`}
+            </span>
+          )}
+          <button onClick={registerCameraLocation} disabled={locBusy}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-eco-500/30 text-eco-300 hover:bg-eco-500/10 disabled:opacity-50">
+            <MapPin className="w-3 h-3" /> {locBusy ? "Locating…" : "Set camera location (this device's GPS)"}
+          </button>
+          {locMsg && <span className="text-[11px] text-slate-400 w-full">{locMsg}</span>}
           {health.camera_resolution && <span className="font-mono">{health.camera_resolution}</span>}
           {/* A9: show MJPEG URL */}
           {camConfig.mjpeg_url && (

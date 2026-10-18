@@ -166,6 +166,7 @@ export async function createDumpReport(payload: {
   lat: number;
   lng: number;
   reported_image_url: string;
+  location_accuracy_m?: number | null;
 }) {
   const { data, error } = await supabase
     .from("dump_reports")
