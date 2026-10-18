@@ -10,6 +10,7 @@ export async function POST(req: NextRequest) {
 
     if (!name || !phone) return fail("Name and phone are required.", 400);
     if (!email) return fail("Email is required to enable login.", 400);
+    if (!imageBase64) return fail("Face enrollment is required to register.", 400);
 
     const supabase = serverSupabase();
 

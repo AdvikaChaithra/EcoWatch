@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Leaf, LayoutDashboard, HardHat, Camera, Bell, Wifi,
-  TrendingUp, ChevronDown, LogOut, User, Shield
+  ChevronDown, LogOut, User, Shield
 } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,6 @@ const NAV = [
 export function GlobalHeader() {
   const pathname = usePathname();
   const router = useRouter();
-  const civicIndex     = useEcoStore((s) => s.civicIndex);
   const liveAlerts     = useEcoStore((s) => s.liveAlerts);
   const totalViolations= useEcoStore((s) => s.totalViolationsToday);
   const workersOnDuty  = useEcoStore((s) => s.workersOnDuty);
@@ -34,10 +33,6 @@ export function GlobalHeader() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
-  const civicColor =
-    civicIndex >= 80 ? "text-green-400" :
-    civicIndex >= 60 ? "text-yellow-400" :
-    civicIndex >= 40 ? "text-orange-400" : "text-red-400";
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/8 bg-civic-950/95 backdrop-blur-xl">
@@ -80,17 +75,6 @@ export function GlobalHeader() {
 
           {/* Right Side */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Civic Index — show static shell until mounted to avoid hydration mismatch */}
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">
-              <TrendingUp className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-xs text-slate-400">Civic Index</span>
-              {mounted
-                ? <span className={cn("text-sm font-bold", civicColor)}>{civicIndex}</span>
-                : <span className="text-sm font-bold text-slate-400">—</span>
-              }
-              <span className="text-xs text-slate-500">/100</span>
-            </div>
-
             {/* Live Stats */}
             {mounted && (
               <div className="hidden md:flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">

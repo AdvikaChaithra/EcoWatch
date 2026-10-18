@@ -197,7 +197,6 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
   const [loading,  setLoading] = useState(false);
   const [error,    setError]   = useState("");
   const [success,  setSuccess] = useState(false);
-  const [showFace, setShowFace]= useState(false);
   const [consent,  setConsent] = useState(false);
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "", ward: "", gov_id: "" });
 
@@ -227,13 +226,14 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
     e.preventDefault();
     if (!form.name || !form.phone) { setError("Name and phone are required."); return; }
     if (!form.email) { setError("Email is required to enable login."); return; }
-    if (captured && !consent) { setError("Please give consent to store your face data, or remove the photo."); return; }
+    if (!captured) { setError("Face enrollment is required: start the camera and capture your face."); return; }
+    if (!consent) { setError("Please tick the consent box to store your face template."); return; }
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/auth/register-face", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, imageBase64: captured ?? null, consent: !!(captured && consent) }),
+        body: JSON.stringify({ ...form, imageBase64: captured, consent }),
       });
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Registration failed."); return; }
@@ -288,21 +288,17 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
         ))}
       </div>
 
-      {/* Optional Face Enrollment */}
-      <div className="border border-white/8 rounded-xl p-4 space-y-3 bg-white/2">
-        <button
-          type="button"
-          onClick={() => setShowFace(v => !v)}
-          className="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-200 transition-colors w-full text-left"
-        >
+      {/* Face Enrollment (required) */}
+      <div className="border border-eco-500/20 rounded-xl p-4 space-y-3 bg-white/2">
+        <div className="flex items-center gap-2 text-sm text-slate-400">
           <Scan className="w-4 h-4 text-eco-400 shrink-0" />
           <span>
-            <strong className="text-slate-300">Optional:</strong> Enroll face for litter-camera identification (not used to log in)
+            <strong className="text-slate-300">Face enrollment (required):</strong> used by the AI camera to identify
+            littering linked to your account. Not used to log in.
           </span>
-          <span className="ml-auto text-xs text-slate-500">{showFace ? "▲ Hide" : "▼ Show"}</span>
-        </button>
+        </div>
 
-        {showFace && (
+        {(
           <div className="space-y-3">
             <label className="flex items-start gap-2 text-[11px] text-slate-400 leading-snug">
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5" />
@@ -361,7 +357,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
 
       <button
         type="submit"
-        disabled={loading || !form.name || !form.phone || !form.email}
+        disabled={loading || !form.name || !form.phone || !form.email || !captured || !consent}
         className="btn-eco w-full justify-center"
       >
         {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
@@ -369,7 +365,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
       </button>
 
       <p className="text-center text-xs text-slate-500">
-        Name, phone & email are required · Face enrollment is optional
+        Name, phone, email and face enrollment are required
       </p>
     </form>
   );
