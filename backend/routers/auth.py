@@ -41,8 +41,11 @@ def _get_face_analyzer():
     global _face_analyzer
     if _face_analyzer is None:
         from insightface.app import FaceAnalysis
+        # Only the models we use: detection, ArcFace recognition, and 3D landmarks (head pose for
+        # the quality gate). Skipping genderage + 2d106 landmarks roughly halves CPU time.
         _face_analyzer = FaceAnalysis(
             name="buffalo_l",
+            allowed_modules=["detection", "recognition", "landmark_3d_68"],
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
         _face_analyzer.prepare(ctx_id=0, det_size=(640, 640))

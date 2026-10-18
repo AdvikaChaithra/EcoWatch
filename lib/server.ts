@@ -3,7 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 
-export const BACKEND_URL = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+// 127.0.0.1 (not "localhost"): uvicorn listens on IPv4 only, and Node may resolve localhost to ::1.
+export const BACKEND_URL = process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
 
 export class ConfigError extends Error {}
 
@@ -107,14 +108,22 @@ export async function extractEmbedding(imageBase64: string): Promise<EmbeddingRe
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image_base64: imageBase64 }),
-      signal: AbortSignal.timeout(15000),
+      // CPU-only face models can take several seconds when the machine is busy (camera engine,
+      // website). Allow ample time instead of reporting a false "offline".
+      signal: AbortSignal.timeout(60000),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && Array.isArray(data.embedding)) return { ok: true, embedding: data.embedding };
     if (res.status === 422) return { ok: false, reason: "no_face", message: data.detail ?? "No face detected." };
     if (res.status === 503) return { ok: false, reason: "offline", message: data.detail ?? "Face recognition is unavailable." };
+    console.error("[extractEmbedding] backend error", res.status, data);
     return { ok: false, reason: "error", message: data.detail ?? `Face service error (${res.status}).` };
-  } catch {
-    return { ok: false, reason: "offline", message: "Face recognition backend offline. Start backend/main.py and try again." };
+  } catch (e: any) {
+    const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
+    console.error("[extractEmbedding]", timedOut ? "timed out" : "request failed", e?.cause?.code ?? e?.message);
+    if (timedOut) {
+      return { ok: false, reason: "error", message: "Face service is busy. Please wait a few seconds and try again." };
+    }
+    return { ok: false, reason: "offline", message: `Face recognition backend not reachable at ${BACKEND_URL}. Start it with: python -m uvicorn backend.main:app --port 8000` };
   }
 }
