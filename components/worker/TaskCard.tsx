@@ -98,15 +98,21 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
 
     const GEOFENCE_RADIUS_METERS = 50;
 
-    // 1. Acquire EXACT fresh GPS
+    // 1. Open the camera first (no GPS wait); the location is taken once, at capture time.
+    if (!cam.active) { await cam.startCamera("environment"); return; }
+
+    // 2. Acquire a fresh, best-accuracy GPS fix for the proof photo
     const gpsResult = await geo.fetchLocation();
 
     // 2. Strict 50m geofence — enforce only when we have a GPS fix AND task coordinates
     if (gpsResult.lat !== null && gpsResult.lng !== null && task.lat !== undefined && task.lng !== undefined) {
       const dist = haversineMeters(gpsResult.lat, gpsResult.lng, task.lat, task.lng);
       if (dist > GEOFENCE_RADIUS_METERS) {
+        const acc = Math.round(gpsResult.accuracy ?? 0);
         setGeoError(
-          `You are ${Math.round(dist)}m away. Must be within ${GEOFENCE_RADIUS_METERS}m to submit proof.`
+          acc > GEOFENCE_RADIUS_METERS
+            ? `GPS accuracy is only ±${acc} m, too low to verify you are within ${GEOFENCE_RADIUS_METERS} m of the site (measured ${Math.round(dist)} m). Use a phone with GPS on, or step outside and retry.`
+            : `You are ${Math.round(dist)} m away. You must be within ${GEOFENCE_RADIUS_METERS} m of the site to submit proof.`
         );
         return;
       }
@@ -115,9 +121,7 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
       return;
     }
 
-    if (!cam.active) { await cam.startCamera("environment"); return; }
-
-    // If active and no image yet, capture the frame and return (wait for submit click)
+    // Capture the frame with the GPS stamp (the next click submits it)
     cam.captureFrame({
       lat:     gpsResult.lat  ?? task.lat,
       lng:     gpsResult.lng  ?? task.lng,

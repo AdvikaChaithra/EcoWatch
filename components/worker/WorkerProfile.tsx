@@ -32,7 +32,12 @@ export function WorkerProfile({ workerId }: Props) {
   const [loading, setLoading] = useState(true);
   const [redeeming, setRedeeming] = useState<string | null>(null);
 
-  useEffect(() => { if (workerId) loadAll(); }, [workerId]);
+  const [loadError, setLoadError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (workerId) loadAll(); else setLoading(false);
+  }, [workerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadAll() {
     setLoading(true);
@@ -41,31 +46,40 @@ export function WorkerProfile({ workerId }: Props) {
         // JOIN admins table to get supervisor name (may be null if schema not yet applied)
         supabase
           .from("workers")
-          .select("*, admins(name, email, designation)")
+          // explicit columns: never send pin_hash (credential) to the browser
+          .select("id,name,phone,ward,employee_id,tasks_completed,bonus_accrued,eco_points,tier,status,admin_id,admins(name, email, designation)")
           .eq("id", workerId)
           .maybeSingle(),
         // target_role is the actual column name in rewards table
         supabase.from("rewards").select("id,title,points_cost,category").eq("target_role", "worker"),
       ]);
-      if (wRes.data) setWorker(wRes.data as WorkerData);
+      if (wRes.error) throw wRes.error;
+      if (rRes.error) console.warn("[WorkerProfile] rewards unavailable:", rRes.error.message);
+      if (wRes.data) setWorker(wRes.data as unknown as WorkerData);
+      setLoadError("");
       // Fall back to empty array if rewards table not seeded yet
       setRewards(rRes.data ?? []);
     } catch (e: any) {
       console.warn('[WorkerProfile] DB query failed:', e?.message);
+      setLoadError(`Could not load your profile (${e?.message ?? "database error"}).`);
     } finally { setLoading(false); }
   }
 
   async function handleRedeem(reward: Reward) {
     if (!worker || worker.eco_points < reward.points_cost) return;
     setRedeeming(reward.id);
+    setNotice("");
     const prevPoints = worker.eco_points;
     // Optimistic update
     setWorker((w) => w ? { ...w, eco_points: w.eco_points - reward.points_cost } : w);
     try {
-      const { error } = await supabase.from("workers").update({
-        eco_points: worker.eco_points - reward.points_cost,
-      }).eq("id", workerId);
+      // optimistic lock: only succeeds if the balance hasn't changed (no double spend)
+      const { data, error } = await supabase.from("workers").update({
+        eco_points: prevPoints - reward.points_cost,
+      }).eq("id", workerId).eq("eco_points", prevPoints).select("id");
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error("Your points balance changed. Please refresh and try again.");
+      setNotice(`Redeemed "${reward.title}" for ${reward.points_cost} points. Collect it from your supervisor.`);
     } catch (err: any) {
       // FIX 3: Revert optimistic update on failure
       console.error("[WorkerProfile] Redeem failed:", err?.message);
@@ -75,7 +89,7 @@ export function WorkerProfile({ workerId }: Props) {
   }
 
   if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 text-yellow-400 animate-spin" /></div>;
-  if (!worker) return <div className="glass-card p-8 text-center text-slate-500">Profile not found</div>;
+  if (!worker) return <div className="glass-card p-8 text-center text-slate-500">{loadError || "Profile not found"}</div>;
 
   const tier  = worker.tier ?? "Bronze";
   const pts   = worker.eco_points ?? 0;
@@ -145,6 +159,7 @@ export function WorkerProfile({ workerId }: Props) {
         <h3 className="font-display font-bold text-lg text-slate-100 flex items-center gap-2 mb-4">
           <Package className="w-5 h-5 text-yellow-400" /> Welfare Marketplace
         </h3>
+        {notice && <p className="mb-3 text-sm text-eco-300">{notice}</p>}
         {rewards.length === 0 ? (
           <div className="glass-card p-8 text-center text-slate-500 text-sm">No rewards available</div>
         ) : (
