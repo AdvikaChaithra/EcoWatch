@@ -1128,12 +1128,15 @@ class VisionEngine:
 
         self._post_status("CAMERA_READY", f"Opening {CAMERA_SOURCE!r}")
         if not self.camera.open():
+            # Don't exit: the camera thread keeps retrying every few seconds (privacy shutter,
+            # dark room, or another app holding the webcam), and the UI shows CAMERA OFFLINE.
             self._post_status("CAMERA_ERROR",
-                f"Cannot open {CAMERA_SOURCE!r}. Check CAMERA_SOURCE.", error=True)
-            return
+                f"Cannot get frames from {CAMERA_SOURCE!r} yet - retrying automatically "
+                f"(check the lens/shutter/lighting and that no other app uses the webcam).", error=True)
 
-        self._post_status("CAMERA_READY",
-            f"{CAMERA_ID} | {self.camera.width}x{self.camera.height}")
+        if self.camera.status == "CAMERA_READY":
+            self._post_status("CAMERA_READY",
+                f"{CAMERA_ID} | {self.camera.width}x{self.camera.height}")
         self._post_status("TRACKER_READY", "ByteTrack + WasteTrackStitcher v2")
         self._post_status("EVENT_ENGINE_READY",
             f"SM v3 | dwell={LITTER_CFG.dwell_seconds}s | grace={LITTER_CFG.grace_seconds}s")
