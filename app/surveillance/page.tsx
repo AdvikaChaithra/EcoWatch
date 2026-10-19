@@ -98,6 +98,7 @@ const ZERO_HEALTH: NodeHealth = {
 
 export default function SurveillanceDashboard() {
   const [running,       setRunning]       = useState(false);
+  const [wsRetry,       setWsRetry]       = useState(0);   // bumps to trigger a reconnect
   const [wsStatus,      setWsStatus]      = useState<"connected"|"disconnected"|"connecting">("disconnected");
   const [bootStage,     setBootStage]     = useState<BootStage>("OFFLINE");
   const [bboxes,        setBboxes]        = useState<BBox[]>([]);
@@ -168,6 +169,7 @@ export default function SurveillanceDashboard() {
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
+    let closedByCleanup = false;
 
     ws.onopen = () => {
       setWsStatus("connected");
@@ -311,11 +313,17 @@ export default function SurveillanceDashboard() {
       }
     };
 
-    ws.onclose  = () => { setWsStatus("disconnected"); addLog("WS disconnected", "sys"); };
+    ws.onclose  = () => {
+      setWsStatus("disconnected");
+      if (closedByCleanup) return;
+      // Backend restarted / network blip: keep retrying while inference is on
+      addLog("WS disconnected — reconnecting in 3 s…", "sys");
+      setTimeout(() => setWsRetry((n) => n + 1), 3000);
+    };
     ws.onerror  = () => addLog("WS error — is FastAPI running on :8000?", "error");
 
-    return () => { ws.close(); };
-  }, [running]); // eslint-disable-line
+    return () => { closedByCleanup = true; ws.close(); };
+  }, [running, wsRetry]); // eslint-disable-line
 
   const isError = bootStage === "CAMERA_ERROR" || bootStage === "YOLO_ERROR";
 
