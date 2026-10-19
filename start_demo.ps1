@@ -18,6 +18,11 @@ if ($Source -ne "") { $engineEnv = "`$env:CAMERA_SOURCE='$Source'; `$env:CAMERA_
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$root'; python -m uvicorn backend.main:app --port 8000"
 Start-Sleep -Seconds 6   # let the API load the face model
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$root'; $engineEnv python -m backend.vision_engine"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$root'; npm run dev"
+# Production build (fast pages). Rebuild only when sources are newer than the last build.
+if (-not (Test-Path "$root\.next\BUILD_ID")) {
+    Write-Host "Building the website (first run, ~1 min)..." -ForegroundColor Cyan
+    npx next build
+}
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$root'; npm start"
 
 Write-Host "`nOpen http://localhost:3000  (citizen: /citizen   admin: /admin   camera: /surveillance)" -ForegroundColor Green

@@ -184,8 +184,8 @@ export function ViolationHub() {
   async function loadViolations() {
     setLoading(true);
     try {
-      let q = supabase.from("violations").select("*").order("timestamp", { ascending: false });
-      if (user?.id) q = q.eq("citizen_id", user.id);
+      if (!user?.id) { setViolations([]); return; }
+      const q = supabase.from("violations").select("*").eq("citizen_id", user.id).order("timestamp", { ascending: false });
       const { data, error } = await q;
       if (error) throw error;
       setViolations(data ?? []);
@@ -210,7 +210,7 @@ export function ViolationHub() {
         payment_method:  payMethod,
         paid_at:         paidAt,
         transaction_ref: txnRef,
-      }).eq("id", selected.id).neq("status", "Paid").select("id");
+      }).eq("id", selected.id).in("status", ["Pending", "Upheld"]).select("id");
 
       if (error) throw error;
       if (!updated || updated.length === 0) throw new Error("This fine was already paid or is no longer available.");
@@ -333,15 +333,15 @@ export function ViolationHub() {
                         <button onClick={() => { setSelected(v); setModal("snapshot"); }} className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 hover:text-eco-400" title="View Snapshot">
                           <Eye className="w-4 h-4" />
                         </button>
+                        {(v.status === "Pending" || v.status === "Upheld") && (
+                          <button onClick={() => { setSelected(v); setModal("payment"); setReceipt(null); }} className="p-1.5 rounded-lg hover:bg-green-500/10 text-slate-400 hover:text-green-400" title="Pay Fine">
+                            <CreditCard className="w-4 h-4" />
+                          </button>
+                        )}
                         {v.status === "Pending" && (
-                          <>
-                            <button onClick={() => { setSelected(v); setModal("payment"); setReceipt(null); }} className="p-1.5 rounded-lg hover:bg-green-500/10 text-slate-400 hover:text-green-400" title="Pay Fine">
-                              <CreditCard className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => { setSelected(v); setModal("dispute"); }} className="p-1.5 rounded-lg hover:bg-orange-500/10 text-slate-400 hover:text-orange-400" title="Dispute">
-                              <FileText className="w-4 h-4" />
-                            </button>
-                          </>
+                          <button onClick={() => { setSelected(v); setModal("dispute"); }} className="p-1.5 rounded-lg hover:bg-orange-500/10 text-slate-400 hover:text-orange-400" title="Dispute">
+                            <FileText className="w-4 h-4" />
+                          </button>
                         )}
                         {v.status === "Paid" && (
                           <button

@@ -102,7 +102,7 @@ export default function AdminAuthPage() {
             <input
               type="text"
               maxLength={6}
-              placeholder="2FA PIN (123456 for demo)"
+              placeholder="2FA code (only if enabled for your account)"
               value={form.totp}
               onChange={e => setForm(f => ({ ...f, totp: e.target.value.replace(/\D/g, "").slice(0,6) }))}
               className="input-civic pl-9 font-mono tracking-[0.3em]"
@@ -125,7 +125,7 @@ export default function AdminAuthPage() {
           </button>
 
           <div className="pt-2 border-t border-white/8 text-center text-xs text-slate-500 space-y-1">
-            <p>Demo: <span className="text-blue-400 font-mono">admin@bbmp.gov.in</span> / <span className="text-blue-400 font-mono">admin123</span> / 2FA: <span className="text-blue-400 font-mono">123456</span></p>
+            <p>Demo: <span className="text-blue-400 font-mono">admin@bbmp.gov.in</span> / <span className="text-blue-400 font-mono">admin123</span></p>
           </div>
         </div>
       </div>
