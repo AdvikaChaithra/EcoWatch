@@ -75,7 +75,19 @@ BLACK_MEAN_LEVEL = 3.0
 # ── Models (A6 + dual model) ─────────────────────────────────────────────────
 PERSON_MODEL_PATH = os.getenv("PERSON_MODEL_PATH", "yolov8n.pt")
 WASTE_MODEL_PATH  = os.getenv("WASTE_MODEL_PATH",  "yolov8n.pt")
+if WASTE_MODEL_PATH != PERSON_MODEL_PATH and not Path(WASTE_MODEL_PATH).exists():
+    # e.g. the open-vocabulary litter model hasn't been built yet (scripts/build_litter_model.py)
+    print(f"[Engine] WASTE_MODEL_PATH={WASTE_MODEL_PATH!r} not found - falling back to {PERSON_MODEL_PATH} "
+          f"(COCO litter classes only). Run: python scripts/build_litter_model.py")
+    WASTE_MODEL_PATH = PERSON_MODEL_PATH
 DUAL_MODEL        = WASTE_MODEL_PATH != PERSON_MODEL_PATH
+# Second (litter) model cost control: it is heavier (open-vocabulary YOLO-World), so it runs on
+# every Nth frame at a smaller input size; detections are reused in between (objects lying
+# still don't need 6 FPS, and the state machine tolerates short gaps).
+WASTE_EVERY_N     = max(1, int(os.getenv("WASTE_EVERY_N_FRAMES", "2")))
+WASTE_IMGSZ       = int(os.getenv("WASTE_IMGSZ", "320"))
+# Open-vocabulary scores are lower than closed-set YOLO scores for the same object.
+WASTE_MODEL_CONF  = float(os.getenv("WASTE_MODEL_CONF", "0.15"))
 
 # COCO classes treated as potential litter (yolov8n is COCO-trained; it has NO class for
 # wrappers / plastic bags / loose paper - those need a litter-trained model, e.g. TACO).
@@ -607,6 +619,10 @@ class VisionEngine:
         self.synth_tracker = SyntheticWasteTracker()
 
         self._running = False
+        self.waste_classes: List[int] = list(TRASH_CLASS_IDS)
+        self._frame_idx = 0
+        self._last_waste: List[dict] = []
+        self._waste_labels: Dict[int, str] = {}
         # Per-person-track recent (timestamp, bbox) so the offender's head can be cropped
         # from earlier frames at event time (no continuous face processing).
         self._person_hist: Dict[int, Deque[Tuple[float, Tuple[int, int, int, int]]]] = {}
@@ -690,6 +706,14 @@ class VisionEngine:
             self.person_model = YOLO(PERSON_MODEL_PATH)
             if DUAL_MODEL:
                 self.waste_model = YOLO(WASTE_MODEL_PATH)
+                names = self.waste_model.names
+                if "person" in names.values() and len(names) != 80:
+                    # open-vocabulary litter model: every vocabulary word except "person" is litter
+                    self.waste_classes = [i for i, n in names.items() if n != "person"]
+                    print(f"[Engine] Litter vocabulary ({len(self.waste_classes)}): "
+                          + ", ".join(names[i] for i in self.waste_classes))
+                else:
+                    self.waste_classes = list(TRASH_CLASS_IDS)
                 print(f"[Engine] Running DUAL model: person={PERSON_MODEL_PATH} waste={WASTE_MODEL_PATH}")
             else:
                 self.waste_model = None
@@ -701,8 +725,8 @@ class VisionEngine:
             self.person_model.track(source=dummy, persist=True, verbose=False, imgsz=YOLO_IMGSZ,
                                     tracker="bytetrack.yaml", classes=all_cls)
             if DUAL_MODEL and self.waste_model:
-                self.waste_model.predict(source=dummy, verbose=False, imgsz=YOLO_IMGSZ,
-                                         classes=list(TRASH_CLASS_IDS))
+                self.waste_model.predict(source=dummy, verbose=False, imgsz=WASTE_IMGSZ,
+                                         classes=self.waste_classes)
 
             self._post_status("YOLO_READY",
                 f"Ready | waste_classes={sorted(TRASH_CLASS_IDS)} | dual={DUAL_MODEL}")
@@ -815,21 +839,35 @@ class VisionEngine:
 
         # ── Waste detection: second model path ────────────────────────────────
         if DUAL_MODEL and self.waste_model is not None:
-            w_results = self.waste_model.predict(
-                source=frame, verbose=False, imgsz=YOLO_IMGSZ, classes=list(TRASH_CLASS_IDS),
-            )
-            waste_bboxes: List[Tuple[int,int,int,int]] = []
-            if w_results and w_results[0].boxes is not None:
-                for box in w_results[0].boxes:
-                    if float(box.conf[0]) < TRASH_CONF:
-                        continue
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    waste_bboxes.append((x1, y1, x2, y2))
-
-            synth_tracks = self.synth_tracker.update(waste_bboxes)
-            for (tid, (x1,y1,x2,y2)) in synth_tracks:
-                cx, cy = (x1+x2)//2, (y1+y2)//2
-                raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy)})
+            self._frame_idx += 1
+            if self._frame_idx % WASTE_EVERY_N == 0 or not self._last_waste:
+                w_results = self.waste_model.predict(
+                    source=frame, verbose=False, imgsz=WASTE_IMGSZ, conf=WASTE_MODEL_CONF,
+                    classes=self.waste_classes,
+                )
+                waste_bboxes: List[Tuple[int,int,int,int]] = []
+                meta: Dict[Tuple[int,int,int,int], Tuple[float, str]] = {}
+                if w_results and w_results[0].boxes is not None:
+                    for box in w_results[0].boxes:
+                        conf = float(box.conf[0])
+                        if conf < WASTE_MODEL_CONF:
+                            continue
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        # ignore "litter" boxes that are really the person (open-vocab "bag" etc.)
+                        if any(_iou((x1, y1, x2, y2), p["bbox"]) > 0.6 for p in persons):
+                            continue
+                        waste_bboxes.append((x1, y1, x2, y2))
+                        meta[(x1, y1, x2, y2)] = (conf, self.waste_model.names.get(int(box.cls[0]), "object"))
+                synth_tracks = self.synth_tracker.update(waste_bboxes)
+                self._last_waste = []
+                for (tid, b) in synth_tracks:
+                    conf, label = meta.get(tuple(b), (None, self._waste_labels.get(tid, "object")))
+                    self._waste_labels[tid] = label
+                    self._last_waste.append({"id": tid, "bbox": tuple(b), "conf": conf, "label": label})
+            for w in self._last_waste:
+                x1, y1, x2, y2 = w["bbox"]
+                raw_wastes.append({"id": w["id"], "bbox": (x1,y1,x2,y2), "center": ((x1+x2)//2, (y1+y2)//2),
+                                   "conf": w["conf"], "label": w["label"]})
 
         # ── Stitch + update waste histories ──────────────────────────────────
         person_height_avg = (sum(p["ph"] for p in persons) / len(persons)) if persons else 80.0
@@ -1178,6 +1216,16 @@ class VisionEngine:
             if SHOW_WINDOW:
                 cv2.destroyAllWindows()
             print("[EcoWatch v5] Stopped.")
+
+
+def _iou(a, b) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    area = lambda r: max(0, r[2] - r[0]) * max(0, r[3] - r[1])
+    return inter / float(area(a) + area(b) - inter)
 
 
 def _eucl(a, b) -> float:
