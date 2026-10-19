@@ -13,7 +13,6 @@ import os
 import base64
 import secrets
 import numpy as np
-from typing import Optional
 from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Depends

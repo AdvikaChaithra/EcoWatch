@@ -92,7 +92,7 @@ def test_same_event_creates_one_violation_and_one_notification():
 
 def test_unidentified_event_has_no_citizen_and_no_fine():
     sb = _FakeSB()
-    a = I.record_event(sb, EVENT, I.IdentityResult(status="NO_MATCH", similarity=0.1))
+    I.record_event(sb, EVENT, I.IdentityResult(status="NO_MATCH", similarity=0.1))
     v = sb.db["violations"][0]
     assert v["citizen_id"] is None and v["fine_amount"] == 0 and v["status"] == "Unidentified"
     assert "notifications" not in sb.db

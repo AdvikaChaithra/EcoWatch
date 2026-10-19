@@ -63,7 +63,7 @@ def _table(name, col="id"):
 
 
 def _rpc():
-    r = sb.rpc("match_face_candidates", {"query_embedding": [0.0] * 512, "k": 1}).execute()
+    sb.rpc("match_face_candidates", {"query_embedding": [0.0] * 512, "k": 1}).execute()
     return "ok"
 
 

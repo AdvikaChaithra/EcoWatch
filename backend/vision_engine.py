@@ -20,7 +20,6 @@ Changes from v4:
 from __future__ import annotations
 
 import base64
-import io
 import json
 import os
 import queue
