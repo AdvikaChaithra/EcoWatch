@@ -130,6 +130,7 @@ export default function AdminAuthPage() {
 
           <div className="pt-2 border-t border-white/8 text-center text-xs text-slate-500 space-y-1">
             <p>Demo: <span className="text-blue-400 font-mono">admin@bbmp.gov.in</span> / <span className="text-blue-400 font-mono">admin123</span></p>
+            <p className="text-amber-300/80">Municipal Commissioner (Super Admin) signs in here too and is taken to the Super Admin portal.</p>
           </div>
         </div>
       </div>

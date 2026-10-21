@@ -33,9 +33,9 @@ export function GlobalHeader() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
   // The Super Admin portal link is only shown to the super admin.
-  const navItems = mounted && currentUser?.role === "super_admin"
-    ? [{ href: "/super", label: "Super Admin", icon: Crown, color: "text-amber-400" }, ...NAV]
-    : NAV;
+  // Super Admin is always listed like the other portals; the /super page itself only admits
+  // the super admin (anyone else is sent to the admin login).
+  const navItems = [...NAV, { href: "/super", label: "Super Admin", icon: Crown, color: "text-amber-400" }];
 
 
   return (
