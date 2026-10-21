@@ -127,3 +127,82 @@ export async function extractEmbedding(imageBase64: string): Promise<EmbeddingRe
     return { ok: false, reason: "offline", message: `Face recognition backend not reachable at ${BACKEND_URL}. Start it with: python -m uvicorn backend.main:app --port 8000` };
   }
 }
+
+// ── Password / PIN hashing (same "pbkdf2$iters$salt$hash" format as backend/security.py) ──
+export function hashSecret(secret: string): string {
+  const iters = 120_000;
+  const salt = crypto.randomBytes(16);
+  const dk = crypto.pbkdf2Sync(secret, salt, iters, 32, "sha256");
+  return `pbkdf2$${iters}$${salt.toString("hex")}$${dk.toString("hex")}`;
+}
+
+/** Random one-time credentials (shown once to the admin who creates/resets the account). */
+export function generatePin(): string {
+  return String(crypto.randomInt(0, 10000)).padStart(4, "0");
+}
+export function generatePassword(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = crypto.randomBytes(10);
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("") + "@" + crypto.randomInt(10, 99);
+}
+
+// ── Signed session tokens ─────────────────────────────────────────────────────
+// The app has no Supabase Auth session yet, so privileged API routes verify a server-signed
+// token issued at login (HMAC-SHA256 with a server-only secret). The browser cannot forge it.
+export type SessionRole = "super_admin" | "admin" | "worker" | "citizen";
+export interface Session { sub: string; role: SessionRole; name: string; exp: number }
+
+let devSecretWarned = false;
+function sessionSecret(): string {
+  const s = process.env.SESSION_SECRET;
+  if (s && s.length >= 32) return s;
+  if (!devSecretWarned) {
+    console.warn("[auth] SESSION_SECRET not set (>=32 chars) in .env.local - using a per-process secret; logins reset on restart.");
+    devSecretWarned = true;
+  }
+  (globalThis as any).__ecowatchDevSecret ??= crypto.randomBytes(32).toString("hex");
+  return (globalThis as any).__ecowatchDevSecret;
+}
+
+const b64url = (b: Buffer | string) => Buffer.from(b).toString("base64url");
+
+export function signSession(sub: string, role: SessionRole, name: string, ttlHours = 12): string {
+  const payload = b64url(JSON.stringify({ sub, role, name, exp: Math.floor(Date.now() / 1000) + ttlHours * 3600 }));
+  const sig = b64url(crypto.createHmac("sha256", sessionSecret()).update(payload).digest());
+  return `${payload}.${sig}`;
+}
+
+export function verifySession(req: Request): Session | null {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const [payload, sig] = token.split(".");
+  if (!payload || !sig) return null;
+  const expected = b64url(crypto.createHmac("sha256", sessionSecret()).update(payload).digest());
+  if (!safeEqual(sig, expected)) return null;
+  try {
+    const s = JSON.parse(Buffer.from(payload, "base64url").toString()) as Session;
+    return s.exp > Date.now() / 1000 ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Returns the session if its role is allowed, otherwise a 401/403 response to return. */
+export function requireRole(req: Request, roles: SessionRole[]): Session | NextResponse {
+  const s = verifySession(req);
+  if (!s) return fail("Your session has expired. Please log in again.", 401);
+  if (!roles.includes(s.role)) return fail("You are not allowed to do this.", 403);
+  return s;
+}
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+export async function audit(
+  sb: ReturnType<typeof serverSupabase>, actor: Session, action: string,
+  targetType: string, targetId: string | null, details: Record<string, unknown> = {},
+) {
+  const { error } = await sb.from("audit_log").insert({
+    actor_id: actor.sub, actor_role: actor.role, actor_name: actor.name,
+    action, target_type: targetType, target_id: targetId, details,
+  });
+  if (error) console.error("[audit] could not record", action, error.message);
+}

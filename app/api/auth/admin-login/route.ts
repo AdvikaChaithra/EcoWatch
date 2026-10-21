@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { serverSupabase, fail, serverError, readJson, verifySecret, verifyTotp } from "@/lib/server";
+import { serverSupabase, fail, serverError, readJson, verifySecret, verifyTotp, signSession } from "@/lib/server";
 
 // Demo shortcuts are OFF by default. Set ALLOW_DEMO_AUTH=true (never in production) to accept
 // the demo 2FA PIN for admins that have no TOTP secret enrolled.
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     const supabase = serverSupabase();
     const { data: admin, error } = await supabase
       .from("admins")
-      .select("id, name, email, password_hash, totp_secret, admin_id, ward_jurisdiction, designation")
+      .select("id, name, email, password_hash, totp_secret, admin_id, ward_jurisdiction, designation, role, active, must_change_password")
       .eq("email", email)
       .maybeSingle();
     if (error) throw error;
@@ -26,6 +26,9 @@ export async function POST(req: NextRequest) {
     // Same response for unknown email and wrong password (no account enumeration).
     if (!admin || !verifySecret(password, admin.password_hash)) {
       return fail("Invalid email or password.", 401);
+    }
+    if (admin.active === false) {
+      return fail("This admin account has been deactivated. Contact the Municipal Commissioner.", 403);
     }
 
     // ── 2FA ───────────────────────────────────────────────────────────────
@@ -38,10 +41,14 @@ export async function POST(req: NextRequest) {
       return fail("2FA is required but not enrolled for this account.", 403);
     }
 
+    const role = admin.role === "super_admin" ? "super_admin" : "admin";
     return NextResponse.json({
       success: true,
+      token: signSession(admin.id, role, admin.name),
       admin: {
         id: admin.id,
+        role,
+        must_change_password: !!admin.must_change_password,
         name: admin.name,
         email: admin.email,
         admin_id: admin.admin_id,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { serverSupabase, fail, serverError, readJson, verifySecret } from "@/lib/server";
+import { serverSupabase, fail, serverError, readJson, verifySecret, signSession } from "@/lib/server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const supabase = serverSupabase();
     const { data: worker, error } = await supabase
       .from("workers")
-      .select("id, name, phone, employee_id, pin_hash, ward, status, active, lat, lng, tasks_completed, eco_points, bonus_accrued, tier")
+      .select("id, name, phone, employee_id, pin_hash, ward, status, active, lat, lng, tasks_completed, eco_points, bonus_accrued, tier, sector_id, must_change_pin")
       .eq("employee_id", employee_id)
       .maybeSingle();
     if (error) throw error;
@@ -35,7 +35,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      token: signSession(worker.id, "worker", worker.name),
       worker: {
+        sector_id: worker.sector_id,
+        must_change_pin: !!worker.must_change_pin,
         id: worker.id,
         name: worker.name,
         phone: worker.phone,
