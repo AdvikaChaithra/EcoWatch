@@ -7,8 +7,9 @@ import { useEcoStore } from "@/lib/store";
 import { getBestPosition } from "@/lib/geo";
 import { ErrorNote } from "@/components/layout/ErrorNote";
 import { cn, statusColor } from "@/lib/utils";
+import { SectorOptions } from "@/components/shared/SectorOptions";
 
-interface Sector { id: string; area: string; name: string; admin_id: string | null; lat: number; lng: number; active?: boolean }
+interface Sector { id: string; area: string; name: string; corporation?: string | null; admin_id: string | null; lat: number; lng: number; active?: boolean }
 interface Worker {
   id: string; name: string; phone: string; employee_id: string; status: string; active: boolean;
   sector_id: string | null; admin_id: string | null; tasks_completed: number; bonus_accrued: number;
@@ -50,7 +51,7 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
     if (!user?.id) return;
     setLoading(true);
     try {
-      let sq = supabase.from("sectors").select("id,area,name,admin_id,lat,lng,active").order("area");
+      let sq = supabase.from("sectors").select("id,area,name,corporation,admin_id,lat,lng,active").order("area");
       if (scope === "admin") sq = sq.eq("admin_id", user.id);
       const { data: sData, error: sErr } = await sq;
       if (sErr) throw sErr;
@@ -142,7 +143,7 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
         </div>
         <select className="input-civic py-1.5 text-sm w-auto" value={filterSector} onChange={(e) => setFilterSector(e.target.value)}>
           <option value="all">All sectors</option>
-          {sectors.map((s) => <option key={s.id} value={s.id}>{s.area} — {s.name}{s.active === false ? " (retired)" : ""}</option>)}
+          <SectorOptions sectors={sectors} />
         </select>
         <select className="input-civic py-1.5 text-sm w-auto" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)}>
           <option value="active">Active</option><option value="On Duty">On duty</option>
@@ -155,7 +156,7 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
       </div>
       {!activeSectors.length && (
         <p className="text-xs text-orange-300">
-          {scope === "admin" ? "No sectors are assigned to you yet. Ask the Municipal Commissioner (super admin) to assign one." : "Create a sector first."}
+          {scope === "admin" ? "No sectors are assigned to you yet. Ask the Municipal Commissioner (super admin) to assign one." : "No active sectors - re-activate one in the Sectors tab."}
         </p>
       )}
 
@@ -170,7 +171,7 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
             <input className="input-civic" placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <input className="input-civic" placeholder="Phone (+91XXXXXXXXXX)" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             <select className="input-civic" value={form.sector_id} onChange={(e) => setForm({ ...form, sector_id: e.target.value })}>
-              {activeSectors.map((s) => <option key={s.id} value={s.id}>{s.area} — {s.name}{scope === "super" ? ` · ${adminName(s.admin_id)}` : ""}</option>)}
+              <SectorOptions sectors={activeSectors} suffix={scope === "super" ? (s) => ` · ${adminName(s.admin_id)}` : undefined} />
             </select>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -259,9 +260,8 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
             {scope === "admin" && " You can transfer only between your own sectors; ask the super admin for other admins' sectors."}
           </p>
           <select className="input-civic" value={transferTo} onChange={(e) => setTransferTo(e.target.value)}>
-            {activeSectors.filter((s) => s.id !== transfer.sector_id).map((s) => (
-              <option key={s.id} value={s.id}>{s.area} — {s.name}{scope === "super" ? ` · ${adminName(s.admin_id)}` : ""}</option>
-            ))}
+            <SectorOptions sectors={activeSectors.filter((s) => s.id !== transfer.sector_id)}
+                           suffix={scope === "super" ? (s) => ` · ${adminName(s.admin_id)}` : undefined} />
           </select>
           <button className="btn-eco w-full justify-center" disabled={!transferTo || busy === transfer.id + "Transfer"}
                   onClick={async () => { if (await act(transfer, { action: "transfer", sector_id: transferTo }, "Transfer")) setTransfer(null); }}>

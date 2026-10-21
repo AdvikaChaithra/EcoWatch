@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { MapPin } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
+import { SectorOptions } from "@/components/shared/SectorOptions";
 
 /** Area -> Sector selector for the logged-in admin (their own sectors only). */
 export function SectorFilter() {
@@ -16,7 +17,7 @@ export function SectorFilter() {
     if (!user?.id) return;
     supabase
       .from("sectors")
-      .select("id,area,name,admin_id")
+      .select("id,area,name,corporation,admin_id")
       .eq("admin_id", user.id)
       .eq("active", true)
       .order("area")
@@ -39,9 +40,7 @@ export function SectorFilter() {
         className="input-civic py-1.5 text-sm w-auto"
       >
         <option value="all">All my sectors ({mySectors.length})</option>
-        {mySectors.map((s) => (
-          <option key={s.id} value={s.id}>{s.area} — {s.name}</option>
-        ))}
+        <SectorOptions sectors={mySectors} />
       </select>
     </div>
   );

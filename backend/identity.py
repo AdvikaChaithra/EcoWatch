@@ -211,7 +211,7 @@ def _nearest_sector(sb, lat: Optional[float], lng: Optional[float]) -> Optional[
     if lat is None or lng is None:
         return None
     try:
-        rows = sb.table("sectors").select("id,lat,lng").execute().data or []
+        rows = sb.table("sectors").select("id,lat,lng").eq("active", True).execute().data or []
         if not rows:
             return None
         return min(rows, key=lambda s: (s["lat"] - lat) ** 2 + (s["lng"] - lng) ** 2)["id"]

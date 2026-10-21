@@ -56,15 +56,17 @@
 The first login forces you to set your own password (min 8 characters, letters + numbers).
 After that, the header shows a **Super Admin** link → `/super`.
 
-**Hierarchy:** Super Admin → Area → Sector (one responsible admin) → Workers.
+**Hierarchy:** Super Admin → City Corporation → Sector (one responsible admin) → Workers.
+Bengaluru is **pre-divided** into 52 sectors (real localities, OpenStreetMap centres) across the 5 Greater Bengaluru
+city corporations (Central, North, South, East, West) + Electronic City township - `migrations/005_bengaluru_sectors.sql`.
 Dump reports, violations and cameras are routed to the sector whose centre is nearest; only that
 sector's admin sees and controls them and the sector's workers.
 
 | Portal tab | What the super admin does |
 |---|---|
-| Overview | City-wide totals + per-sector table (admin, workers on duty, open reports, unpaid fines) |
+| Overview | City-wide totals + table of sectors with activity (admin, workers on duty, open reports, unpaid fines) |
 | Admins | Create admin (temporary password shown once), edit, reset password, deactivate/reactivate (blocked while the admin still owns sectors) |
-| Sectors | Create sector (area, name, centre from GPS or typed), assign/reassign admin (its workers follow automatically), edit, retire |
+| Sectors | Pre-loaded sectors grouped by corporation: assign a whole corporation or one sector to an admin (workers follow), assign workers into a sector, edit, retire; custom sector only for unlisted localities |
 | Workers | All workers city-wide: add (generated employee ID + one-time PIN), edit, reset PIN, transfer to any sector, deactivate |
 | Audit Log | Every privileged action: who, what, when |
 
@@ -72,6 +74,6 @@ sector's admin sees and controls them and the sector's workers.
 transfer between their own sectors, deactivate. New workers get a one-time PIN and must set their own
 PIN at first login. All of this is enforced on the server with signed session tokens, not just hidden in the UI.
 
-Demo flow: Super Admin creates admin "Ward Officer" → creates sector "Vijayanagar — Sector 2" and assigns it →
-log in as that admin (temporary password → set own) → Workforce → Add Worker in Vijayanagar — Sector 2 →
+Demo flow: Super Admin creates admin "Ward Officer" → Sectors → West corporation → assign "Vijayanagar — Sector 1" to them →
+log in as that admin (temporary password → set own) → Workforce → Add Worker in Vijayanagar — Sector 1 →
 note the employee ID + one-time PIN → Worker Portal login → set own PIN → Super Admin → Audit Log shows every step.

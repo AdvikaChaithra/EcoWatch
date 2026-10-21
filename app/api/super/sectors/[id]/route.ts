@@ -24,6 +24,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (action === "update") {
       if (typeof b?.area === "string" && b.area.trim()) update.area = b.area.trim();
       if (typeof b?.name === "string" && b.name.trim()) update.name = b.name.trim();
+      if (typeof b?.corporation === "string") update.corporation = b.corporation.trim() || null;
       if (b?.lat !== undefined || b?.lng !== undefined) {
         const lat = Number(b.lat), lng = Number(b.lng);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return fail("Invalid latitude/longitude.", 400);

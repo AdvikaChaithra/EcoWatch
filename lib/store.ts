@@ -15,7 +15,7 @@ export interface LiveAlert {
   bbox?: { person?: number[]; waste?: number[] };
 }
 
-export interface Sector { id: string; area: string; name: string; admin_id?: string | null; lat?: number; lng?: number; }
+export interface Sector { id: string; area: string; name: string; corporation?: string | null; admin_id?: string | null; lat?: number; lng?: number; }
 
 export interface AuthUser {
   id: string;

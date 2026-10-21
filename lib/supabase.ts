@@ -136,10 +136,11 @@ export async function getDumpReports(citizenId?: string) {
 
 // ─── Sectors ─────────────────────────────────────────────────────────────────
 
-export interface SectorRow { id: string; area: string; name: string; admin_id: string | null; lat: number; lng: number; }
+export interface SectorRow { id: string; area: string; name: string; corporation: string | null; admin_id: string | null; lat: number; lng: number; }
 
+/** Active sectors only - retired sectors no longer receive reports or appear in rankings. */
 export async function getSectors(): Promise<SectorRow[]> {
-  const { data, error } = await supabase.from("sectors").select("id,area,name,admin_id,lat,lng");
+  const { data, error } = await supabase.from("sectors").select("id,area,name,corporation,admin_id,lat,lng").eq("active", true);
   if (error) throw error;
   return (data ?? []) as SectorRow[];
 }

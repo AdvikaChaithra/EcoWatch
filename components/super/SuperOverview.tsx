@@ -4,8 +4,9 @@ import { Loader2, UserCog, Map, Users, UserCheck, ClipboardList, IndianRupee } f
 import { supabase } from "@/lib/supabase";
 import { authFetch } from "@/lib/api";
 import { ErrorNote } from "@/components/layout/ErrorNote";
+import { corpLabel } from "@/components/shared/SectorOptions";
 
-interface Row { id: string; area: string; name: string; admin: string; active: boolean; workers: number; onDuty: number; openReports: number; unpaid: number; unpaidAmount: number }
+interface Row { id: string; area: string; name: string; corporation: string | null; admin: string; active: boolean; workers: number; onDuty: number; openReports: number; unpaid: number; unpaidAmount: number }
 
 /** City-wide picture for the Municipal Commissioner, computed live from the database. */
 export function SuperOverview() {
@@ -19,7 +20,7 @@ export function SuperOverview() {
       try {
         const [{ admins }, sec, wk, rep, vio, cit] = await Promise.all([
           authFetch<{ admins: { id: string; name: string; role: string; active: boolean }[] }>("/api/super/admins"),
-          supabase.from("sectors").select("id,area,name,admin_id,active").order("area"),
+          supabase.from("sectors").select("id,area,name,corporation,admin_id,active").order("area"),
           supabase.from("workers").select("sector_id,status,active"),
           supabase.from("dump_reports").select("sector_id,status").neq("status", "Cleaned & Verified"),
           supabase.from("violations").select("sector_id,status,fine_amount").in("status", ["Pending", "Upheld"]),
@@ -31,13 +32,15 @@ export function SuperOverview() {
           const w = (wk.data ?? []).filter((x: any) => x.sector_id === s.id && x.active);
           const v = (vio.data ?? []).filter((x: any) => x.sector_id === s.id);
           return {
-            id: s.id, area: s.area, name: s.name, admin: name(s.admin_id), active: s.active !== false,
+            id: s.id, area: s.area, name: s.name, corporation: s.corporation, admin: name(s.admin_id), active: s.active !== false,
             workers: w.length, onDuty: w.filter((x: any) => x.status === "On Duty").length,
             openReports: (rep.data ?? []).filter((x: any) => x.sector_id === s.id).length,
             unpaid: v.length, unpaidAmount: v.reduce((a: number, x: any) => a + Number(x.fine_amount ?? 0), 0),
           };
         });
-        setRows(out);
+        // busiest first; sectors with no workers, reports or fines are summarised, not listed
+        const load = (r: Row) => r.openReports * 2 + r.unpaid * 2 + r.workers;
+        setRows(out.sort((a, b) => load(b) - load(a) || a.area.localeCompare(b.area)));
         const activeW = (wk.data ?? []).filter((x: any) => x.active);
         setTotals({
           admins: admins.filter((a) => a.role === "admin" && a.active).length,
@@ -80,9 +83,9 @@ export function SuperOverview() {
             <tr><th className="text-left p-3">Sector</th><th className="text-left p-3">Responsible admin</th><th className="p-3">Workers (on duty)</th><th className="p-3">Open reports</th><th className="p-3">Unpaid fines</th></tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.filter((r) => r.workers || r.openReports || r.unpaid).map((r) => (
               <tr key={r.id} className={`border-t border-white/5 ${r.active ? "" : "opacity-50"}`}>
-                <td className="p-3 text-slate-200">{r.area} — {r.name}{!r.active && " (retired)"}<span className="block text-[10px] font-mono text-slate-500">{r.id}</span></td>
+                <td className="p-3 text-slate-200">{r.area} — {r.name}{!r.active && " (retired)"}<span className="block text-[10px] font-mono text-slate-500">{r.id} · {corpLabel(r.corporation)}</span></td>
                 <td className={`p-3 ${r.admin === "Unassigned" ? "text-orange-300" : "text-slate-300"}`}>{r.admin}</td>
                 <td className="p-3 text-center text-slate-300">{r.workers} ({r.onDuty})</td>
                 <td className="p-3 text-center text-slate-300">{r.openReports}</td>
@@ -91,6 +94,9 @@ export function SuperOverview() {
             ))}
           </tbody>
         </table>
+        <p className="p-3 text-[11px] text-slate-500 border-t border-white/5">
+          {rows.filter((r) => !(r.workers || r.openReports || r.unpaid)).length} other sector(s) have no workers, open reports or unpaid fines yet — manage them in the Sectors tab.
+        </p>
       </div>
     </div>
   );

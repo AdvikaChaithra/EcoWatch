@@ -12,6 +12,7 @@ const ACTION_TEXT: Record<string, string> = {
   ADMIN_DEACTIVATE: "deactivated admin", ADMIN_ACTIVATE: "re-activated admin",
   SECTOR_CREATED: "created sector", SECTOR_UPDATE: "edited sector", SECTOR_REASSIGN: "reassigned sector",
   SECTOR_DEACTIVATE: "retired sector", SECTOR_ACTIVATE: "re-activated sector",
+  CORPORATION_ASSIGN: "assigned a whole city corporation",
   WORKER_CREATED: "added worker", WORKER_UPDATE: "edited worker", WORKER_RESET_PIN: "reset worker PIN",
   WORKER_TRANSFER: "transferred worker", WORKER_DEACTIVATE: "deactivated worker", WORKER_ACTIVATE: "re-activated worker",
   PASSWORD_CHANGED: "changed own password", PIN_CHANGED: "changed own PIN",
