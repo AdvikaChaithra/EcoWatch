@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import { Camera, MapPin, Loader2, CheckCircle2, AlertCircle, Upload, X, ImagePlus, RefreshCw } from "lucide-react";
 import { useCamera } from "@/hooks/useCamera";
+import { fileToJpegDataUrl } from "@/lib/image";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { createDumpReport, checkDuplicateReport, updateCitizenEcoPoints, getNearestSectorId } from "@/lib/supabase";
 import { TARGET_ACCURACY_M } from "@/lib/geo";
@@ -10,23 +11,6 @@ import { cn } from "@/lib/utils";
 
 const CATEGORIES = ["Illegal Dump Yard","Plastic Waste","Overflowing Bin","Hazardous Debris","Dead Animal","Oil Spill"];
 const SEVERITIES = ["Low","Medium","High","Critical"] as const;
-
-/** Downscale an uploaded photo (max 1280 px) so reports stay small. */
-async function fileToJpegDataUrl(file: File): Promise<string> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((res, rej) => {
-      const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Could not read that image")); i.src = url;
-    });
-    const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
-    const c = document.createElement("canvas");
-    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-    c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.9);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 export function ReportTool() {
   const user = useEcoStore((s) => s.currentUser);

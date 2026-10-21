@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState, useCallback, useEffect } from "react";
 import { borrowWebcam, returnWebcam } from "@/lib/webcamShare";
+import { drawGpsStamp } from "@/lib/image";
 
 export function useCamera() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -47,6 +48,16 @@ export function useCamera() {
     returnWebcam(); // hand the webcam back to the AI camera engine
   }, []);
 
+  // Attach the stream once the <video> exists: the camera may be started in the same click that
+  // renders the video element (e.g. opening a panel), before the ref is set.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (active && v && streamRef.current && v.srcObject !== streamRef.current) {
+      v.srcObject = streamRef.current;
+      v.play().catch(() => {});
+    }
+  });
+
   // Turn the webcam off (and hand it back) when the component using it unmounts.
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -67,21 +78,7 @@ export function useCamera() {
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // GPS watermark overlay
-    if (gpsData) {
-      const now = new Date();
-      const stamp = [
-        `📍 ${gpsData.address ?? `${gpsData.lat.toFixed(5)}, ${gpsData.lng.toFixed(5)}`}`,
-        `⏱ ${now.toLocaleString("en-IN")} | ${now.toLocaleDateString("en-IN", { weekday: "long" })}`,
-        `🛰 GPS: ${gpsData.lat.toFixed(6)}, ${gpsData.lng.toFixed(6)}`,
-        "EcoWatch™ Verified",
-      ];
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(0, canvas.height - 90, canvas.width, 90);
-      ctx.fillStyle = "#10b981";
-      ctx.font = "bold 13px monospace";
-      stamp.forEach((line, i) => ctx.fillText(line, 10, canvas.height - 75 + i * 20));
-    }
+    if (gpsData) drawGpsStamp(ctx, canvas.width, canvas.height, gpsData); // GPS watermark overlay
 
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     setCapturedImage(dataUrl);
