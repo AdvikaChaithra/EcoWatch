@@ -49,3 +49,29 @@
 - *Where is biometric data stored?* Only a 512-D numeric template in Postgres (pgvector), not the photo; consent
   required; one face per account.
 - *What would you do next?* Supabase Auth + RLS, liveness, fine-tuned litter detector, polygon sectors, real payments.
+
+## Super Admin (Municipal Commissioner) — how admins & workers are controlled
+
+**Login:** `/auth/admin` with `superadmin@bbmp.gov.in` and the temporary password `SuperAdmin@2026`.
+The first login forces you to set your own password (min 8 characters, letters + numbers).
+After that, the header shows a **Super Admin** link → `/super`.
+
+**Hierarchy:** Super Admin → Area → Sector (one responsible admin) → Workers.
+Dump reports, violations and cameras are routed to the sector whose centre is nearest; only that
+sector's admin sees and controls them and the sector's workers.
+
+| Portal tab | What the super admin does |
+|---|---|
+| Overview | City-wide totals + per-sector table (admin, workers on duty, open reports, unpaid fines) |
+| Admins | Create admin (temporary password shown once), edit, reset password, deactivate/reactivate (blocked while the admin still owns sectors) |
+| Sectors | Create sector (area, name, centre from GPS or typed), assign/reassign admin (its workers follow automatically), edit, retire |
+| Workers | All workers city-wide: add (generated employee ID + one-time PIN), edit, reset PIN, transfer to any sector, deactivate |
+| Audit Log | Every privileged action: who, what, when |
+
+**Admins** (Admin Console → Workforce) manage only workers in their own sectors: add, edit, reset PIN,
+transfer between their own sectors, deactivate. New workers get a one-time PIN and must set their own
+PIN at first login. All of this is enforced on the server with signed session tokens, not just hidden in the UI.
+
+Demo flow: Super Admin creates admin "Ward Officer" → creates sector "Vijayanagar — Sector 2" and assigns it →
+log in as that admin (temporary password → set own) → Workforce → Add Worker in Vijayanagar — Sector 2 →
+note the employee ID + one-time PIN → Worker Portal login → set own PIN → Super Admin → Audit Log shows every step.

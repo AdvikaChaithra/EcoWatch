@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverSupabase, fail, serverError, readJson, hashSecret, generatePassword, requireRole, audit } from "@/lib/server";
 
+// Reads the caller's session token, so this route must never be pre-rendered at build time.
+export const dynamic = "force-dynamic";
+
 const SAFE_COLS = "id, name, email, phone, admin_id, ward_jurisdiction, designation, role, active, must_change_password, created_at";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
