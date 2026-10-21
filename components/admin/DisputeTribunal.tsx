@@ -2,6 +2,7 @@
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
 import { useSectorScope } from "@/hooks/useSectorScope";
+import { useEcoStore } from "@/lib/store";
 import { useState, useEffect } from "react";
 import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { getViolations, updateViolationStatus } from "@/lib/supabase";
@@ -20,6 +21,7 @@ export function DisputeTribunal() {
   const [success, setSuccess] = useState("");
 
   const { inScope, key: scopeKey } = useSectorScope();
+  const admin = useEcoStore((st) => st.currentUser);
   useEffect(() => { loadDisputes(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadDisputes() {
@@ -36,7 +38,11 @@ export function DisputeTribunal() {
     if (!selected) return;
     setActionLoading(true);
     try {
-      await updateViolationStatus(selected.id, dismiss ? "Dismissed" : "Upheld");
+      await updateViolationStatus(selected.id, dismiss ? "Dismissed" : "Upheld", {
+        reviewed_by: admin?.id ?? null,
+        reviewed_at: new Date().toISOString(),
+        admin_reason: dismiss ? "Dispute accepted after reviewing evidence" : "Dispute rejected after reviewing evidence",
+      });
       setSuccess(dismiss ? "Penalty waived. Citizen notified." : "Fine upheld. Citizen dispute rejected.");
       setDisputes((d) => d.filter((x) => x.id !== selected.id));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2000);

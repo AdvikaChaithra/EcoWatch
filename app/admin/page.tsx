@@ -5,7 +5,7 @@ import { KPIOverview } from "@/components/admin/KPIOverview";
 import { TaskDispatch } from "@/components/admin/TaskDispatch";
 import { SLAMonitor } from "@/components/admin/SLAMonitor";
 import { DisputeTribunal } from "@/components/admin/DisputeTribunal";
-import { WorkforceManager } from "@/components/admin/WorkforceManager";
+import { WorkerManagement } from "@/components/shared/WorkerManagement";
 import { AdminProfile } from "@/components/admin/AdminProfile";
 import { SectorFilter } from "@/components/admin/SectorFilter";
 import { cn } from "@/lib/utils";
@@ -62,7 +62,7 @@ export default function AdminDashboard() {
         {activeTab === "dispatch"  && <TaskDispatch />}
         {activeTab === "sla"       && <SLAMonitor />}
         {activeTab === "tribunal"  && <DisputeTribunal />}
-        {activeTab === "workforce" && <WorkforceManager />}
+        {activeTab === "workforce" && <WorkerManagement scope="admin" />}
         {activeTab === "profile"   && <AdminProfile />}
       </div>
     </div>

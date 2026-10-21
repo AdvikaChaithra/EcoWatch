@@ -101,7 +101,10 @@ class LitteringConfig:
     dwell_seconds:            float = 2.0
     timeout_seconds:          float = 60.0
     cooldown_seconds:         float = 30.0
-    grace_seconds:            float = 0.7   # A1
+    grace_seconds:            float = 0.7   # A1 (person tracks)
+    # Objects (esp. a small bottle lying still) flicker in/out of detection far more than
+    # people, so they get a longer tolerance before being treated as removed.
+    waste_grace_seconds:      float = 2.5
 
     # Carry classification (A4)
     carry_comotion_threshold: float = 0.4
@@ -393,10 +396,17 @@ class LitteringStateMachine:
 
         # A4-rework: check for pickup in any post-association state where waste is present
         # (waste re-enters person bbox after having been released)
-        if (self.state in (LitterState.OBJECT_SEPARATING, LitterState.OBJECT_DROPPED,
-                           LitterState.OBJECT_STATIONARY, LitterState.PERSON_MOVING_AWAY)
-                and w_ok and wc and p_ok and pb and not self._pickup_detected):
-            if _center_in_bbox(wc, pb):
+        # PICKUP = after the drop, the object is back with the person AND has actually been
+        # moved from where it was put down. Containment alone is not enough: with a close
+        # (desk-height) camera the person box covers most of the frame, so a bottle resting on
+        # the desk is "inside" it while untouched. (Return-before-drop is handled in
+        # _h_separating as PERSON_RETURNED.)
+        if (self.state in (LitterState.OBJECT_DROPPED, LitterState.OBJECT_STATIONARY,
+                           LitterState.PERSON_MOVING_AWAY)
+                and det.waste_present and wc and det.person_present and pb
+                and self._drop_waste_center and not self._pickup_detected):
+            moved = _dist(wc, self._drop_waste_center) > max(tol_px, 20.0)
+            if _center_in_bbox(wc, pb) and moved:
                 self._pickup_detected = True
                 _audit(self, ActionLabel.PICKUP,
                        f"waste re-entered person bbox at state={self.state.value}")
@@ -434,7 +444,7 @@ class LitteringStateMachine:
         return (now - self._person_last_seen) <= self.cfg.grace_seconds
 
     def _waste_within_grace(self, now: float) -> bool:
-        return (now - self._waste_last_seen) <= self.cfg.grace_seconds
+        return (now - self._waste_last_seen) <= self.cfg.waste_grace_seconds
 
     def _effective(self, det: FrameDetection):
         now  = det.timestamp

@@ -1,11 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
-import { AlertTriangle, Camera, Map, Award, ClipboardList, RefreshCw } from "lucide-react";
+import { AlertTriangle, Camera, Map, Award, ClipboardList, UserCircle } from "lucide-react";
 import { ViolationHub } from "@/components/citizen/ViolationHub";
 import { ReportTool } from "@/components/citizen/ReportTool";
 import { ReportTracker } from "@/components/citizen/ReportTracker";
 import { CivicHeatmap } from "@/components/citizen/CivicHeatmap";
 import { RewardsHub } from "@/components/citizen/RewardsHub";
+import { CitizenProfile } from "@/components/citizen/CitizenProfile";
 import { useEcoStore } from "@/lib/store";
 import { bootstrapGlobalStats } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ const TABS = [
   { id: "tracker",    label: "My Reports",  icon: ClipboardList,color: "text-blue-400"    },
   { id: "heatmap",    label: "Civic Map",   icon: Map,          color: "text-purple-400"  },
   { id: "rewards",    label: "Rewards",     icon: Award,        color: "text-yellow-400"  },
+  { id: "profile",    label: "My Profile",  icon: UserCircle,   color: "text-sky-400"     },
 ] as const;
 
 type Tab = typeof TABS[number]["id"];
@@ -80,6 +82,7 @@ export default function CitizenDashboard() {
         {activeTab === "tracker"    && <ReportTracker />}
         {activeTab === "heatmap"    && <CivicHeatmap />}
         {activeTab === "rewards"    && <RewardsHub />}
+        {activeTab === "profile"    && <CitizenProfile />}
       </div>
     </div>
   );

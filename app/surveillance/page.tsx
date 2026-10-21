@@ -5,6 +5,8 @@ import { useEcoStore } from "@/lib/store";
 import { CameraFeed } from "@/components/surveillance/CameraFeed";
 import { BiometricPanel, type IdentityResultMsg } from "@/components/surveillance/BiometricPanel";
 import { PenaltyTerminal, LogEntry } from "@/components/surveillance/PenaltyTerminal";
+import { LiveDetections, type LiveDetection } from "@/components/surveillance/LiveDetections";
+import { getBestPosition, reverseGeocode } from "@/lib/geo";
 import { cn } from "@/lib/utils";
 
 const WS_URL    = process.env.NEXT_PUBLIC_WS_URL    ?? "ws://localhost:8000/ws/alerts";
@@ -64,13 +66,14 @@ interface CameraConfig {
   camera_id: string; camera_name: string;
   latitude: string; longitude: string;
   location_name: string; ward: string;
+  accuracy_m?: number | null; location_source?: string;
   mjpeg_url?: string;                // A9: from /api/camera/config
 }
 
 type BootStage =
   | "OFFLINE" | "STARTING" | "YOLO_READY" | "CAMERA_READY"
   | "TRACKER_READY" | "EVENT_ENGINE_READY" | "SYSTEM_READY"
-  | "CAMERA_ERROR" | "YOLO_ERROR";
+  | "CAMERA_ERROR" | "CAMERA_BLACK" | "CAMERA_PAUSED" | "YOLO_ERROR";
 
 const STAGE_COLOR: Record<string, string> = {
   OFFLINE:            "text-slate-500",
@@ -81,6 +84,8 @@ const STAGE_COLOR: Record<string, string> = {
   EVENT_ENGINE_READY: "text-blue-400",
   SYSTEM_READY:       "text-eco-400",
   CAMERA_ERROR:       "text-red-400",
+  CAMERA_BLACK:       "text-red-400",
+  CAMERA_PAUSED:      "text-yellow-400",
   YOLO_ERROR:         "text-red-400",
 };
 
@@ -94,6 +99,7 @@ const ZERO_HEALTH: NodeHealth = {
 
 export default function SurveillanceDashboard() {
   const [running,       setRunning]       = useState(false);
+  const [wsRetry,       setWsRetry]       = useState(0);   // bumps to trigger a reconnect
   const [wsStatus,      setWsStatus]      = useState<"connected"|"disconnected"|"connecting">("disconnected");
   const [bootStage,     setBootStage]     = useState<BootStage>("OFFLINE");
   const [bboxes,        setBboxes]        = useState<BBox[]>([]);
@@ -104,7 +110,31 @@ export default function SurveillanceDashboard() {
   const [litterEvents,  setLitterEvents]  = useState<LitterEvent[]>([]);
   const [latestEvent,   setLatestEvent]   = useState<LitterEvent | null>(null);
   const [identity,      setIdentity]      = useState<IdentityResultMsg | null>(null);
+  const [identities,    setIdentities]    = useState<Record<string, IdentityResultMsg>>({});
+  const [liveDet,       setLiveDet]       = useState<{ detections: LiveDetection[]; ts: number | null }>({ detections: [], ts: null });
   const [camConfig,     setCamConfig]     = useState<CameraConfig | null>(null);
+  const [locBusy,       setLocBusy]       = useState(false);
+  const [locMsg,        setLocMsg]        = useState("");
+
+  // Register the camera's REAL location from this device's GPS (the incident location for violations)
+  const registerCameraLocation = async () => {
+    setLocBusy(true); setLocMsg("Getting the most accurate GPS fix (up to 15 s)…");
+    try {
+      const fix = await getBestPosition(50, 15000);
+      const place = await reverseGeocode(fix.lat, fix.lng);
+      const res = await fetch(`${BACKEND}/api/camera/location`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ latitude: fix.lat, longitude: fix.lng, accuracy_m: fix.accuracy, name: place.name, ward: place.ward }),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.detail ?? `HTTP ${res.status}`);
+      setCamConfig((c) => c ? { ...c, latitude: String(saved.latitude), longitude: String(saved.longitude),
+        location_name: saved.name, ward: saved.ward, accuracy_m: saved.accuracy_m, location_source: saved.source } : c);
+      setLocMsg(`Camera location saved (±${Math.round(fix.accuracy)} m). New violations will use it.`);
+    } catch (e: any) {
+      setLocMsg(`Could not set location: ${e?.message ?? e}`);
+    } finally { setLocBusy(false); }
+  };
 
   const wsRef = useRef<WebSocket | null>(null);
   const addLiveAlert = useEcoStore((s) => s.addLiveAlert);
@@ -140,6 +170,7 @@ export default function SurveillanceDashboard() {
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
+    let closedByCleanup = false;
 
     ws.onopen = () => {
       setWsStatus("connected");
@@ -172,13 +203,20 @@ export default function SurveillanceDashboard() {
             camera_status:        msg.camera_status,
             camera_resolution:    msg.camera_resolution,
           });
-          if (msg.camera_status === "CAMERA_ERROR") setBootStage("CAMERA_ERROR");
+          if (msg.camera_status === "CAMERA_ERROR" || msg.camera_status === "CAMERA_BLACK" || msg.camera_status === "CAMERA_PAUSED") {
+            setBootStage(msg.camera_status);
+          } else if (msg.camera_status === "CAMERA_READY" && (msg.camera_fps ?? 0) > 0) {
+            // Engine was already running before this page opened (boot messages were missed),
+            // or the camera recovered: live telemetry proves the pipeline is up.
+            setBootStage((s) => (s === "OFFLINE" || s === "CAMERA_ERROR" || s === "CAMERA_BLACK" || s === "CAMERA_PAUSED") ? "SYSTEM_READY" : s);
+          }
           return;
         }
 
         // ── A9: Pipeline state (5 Hz, no images) ─────────────────────────
         if (msg.type === "pipeline_state") {
           setActiveMachines(msg.active_machines ?? []);
+          setLiveDet({ detections: msg.detections ?? [], ts: typeof msg.timestamp === "number" ? msg.timestamp : null });
           return;
         }
 
@@ -186,6 +224,7 @@ export default function SurveillanceDashboard() {
         if (msg.type === "identity_result") {
           const r = msg as IdentityResultMsg;
           setIdentity(r);
+          setIdentities((m) => ({ ...m, [r.event_id]: r }));
           if (r.identity_status === "MATCH") {
             addLog(`✅ IDENTIFIED ${r.citizen_name} · sim=${((r.similarity ?? 0) * 100).toFixed(1)}% · fine ₹${r.fine_amount} · SMS ${r.sms_status ?? "NOT_CONFIGURED"}`, "match");
           } else {
@@ -275,11 +314,17 @@ export default function SurveillanceDashboard() {
       }
     };
 
-    ws.onclose  = () => { setWsStatus("disconnected"); addLog("WS disconnected", "sys"); };
+    ws.onclose  = () => {
+      setWsStatus("disconnected");
+      if (closedByCleanup) return;
+      // Backend restarted / network blip: keep retrying while inference is on
+      addLog("WS disconnected — reconnecting in 3 s…", "sys");
+      setTimeout(() => setWsRetry((n) => n + 1), 3000);
+    };
     ws.onerror  = () => addLog("WS error — is FastAPI running on :8000?", "error");
 
-    return () => { ws.close(); };
-  }, [running]); // eslint-disable-line
+    return () => { closedByCleanup = true; ws.close(); };
+  }, [running, wsRetry]); // eslint-disable-line
 
   const isError = bootStage === "CAMERA_ERROR" || bootStage === "YOLO_ERROR";
 
@@ -342,6 +387,16 @@ export default function SurveillanceDashboard() {
             </span>
           )}
           {camConfig.ward && <span>{camConfig.ward}</span>}
+          {camConfig.latitude && (
+            <span className="font-mono">{Number(camConfig.latitude).toFixed(5)}, {Number(camConfig.longitude).toFixed(5)}
+              {camConfig.accuracy_m != null && ` ±${Math.round(camConfig.accuracy_m)}m`}
+            </span>
+          )}
+          <button onClick={registerCameraLocation} disabled={locBusy}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-eco-500/30 text-eco-300 hover:bg-eco-500/10 disabled:opacity-50">
+            <MapPin className="w-3 h-3" /> {locBusy ? "Locating…" : "Set camera location (this device's GPS)"}
+          </button>
+          {locMsg && <span className="text-[11px] text-slate-400 w-full">{locMsg}</span>}
           {health.camera_resolution && <span className="font-mono">{health.camera_resolution}</span>}
           {/* A9: show MJPEG URL */}
           {camConfig.mjpeg_url && (
@@ -370,7 +425,12 @@ export default function SurveillanceDashboard() {
             <CameraFeed
               bboxes={running ? bboxes : []}
               running={running}
-              cameraOffline={health.camera_status === "CAMERA_ERROR" || bootStage === "CAMERA_ERROR"}
+              cameraOffline={["CAMERA_ERROR", "CAMERA_BLACK", "CAMERA_PAUSED"].includes(health.camera_status ?? "") || bootStage === "CAMERA_ERROR" || bootStage === "CAMERA_BLACK" || bootStage === "CAMERA_PAUSED"}
+              offlineReason={(health.camera_status === "CAMERA_PAUSED" || bootStage === "CAMERA_PAUSED")
+                ? "Camera paused: the website is using the laptop webcam (citizen photo / face enrollment / worker proof). Surveillance resumes automatically when that camera is closed."
+                : (health.camera_status === "CAMERA_BLACK" || bootStage === "CAMERA_BLACK")
+                ? "The webcam is sending only black frames. Check the lens/privacy shutter and lighting, and close other apps using the camera (Teams, Zoom, Camera app, browser tabs). The engine retries automatically."
+                : undefined}
               cameraId={camConfig?.camera_id ?? "CAM_01"}
               mjpegUrl={camConfig?.mjpeg_url}
               activeMachines={running ? activeMachines : []}
@@ -478,11 +538,19 @@ export default function SurveillanceDashboard() {
             </div>
           )}
 
-          {/* Littering Events List */}
+          {/* Live YOLO + ByteTrack detections (data only, ~5 Hz) */}
+          <LiveDetections
+            running={running}
+            detections={liveDet.detections}
+            machines={activeMachines}
+            timestamp={liveDet.ts}
+          />
+
+          {/* Confirmed littering events */}
           <div className="glass-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Detections
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Littering Events
               </p>
               <button onClick={() => setLitterEvents([])}
                       className="p-1 rounded-md hover:bg-white/5 text-slate-500">
@@ -516,9 +584,18 @@ export default function SurveillanceDashboard() {
                       <p className="text-[9px] text-slate-600">
                         {new Date(ev.timestamp).toLocaleTimeString()}
                       </p>
-                      <span className="badge text-[8px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20 ml-auto">
-                        IDENTITY PENDING
-                      </span>
+                      {(() => {
+                        const idr = identities[ev.event_id];
+                        const status: string = idr?.identity_status ?? "IDENTIFYING";
+                        const tone = status === "MATCH" ? "bg-red-500/10 text-red-400 border-red-500/20"
+                          : status === "IDENTIFYING" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                          : "bg-slate-500/10 text-slate-400 border-slate-500/20";
+                        return (
+                          <span className={cn("badge text-[8px] ml-auto", tone)}>
+                            {status === "MATCH" ? `MATCHED · fine ₹${idr?.fine_amount ?? ""}` : status}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))}

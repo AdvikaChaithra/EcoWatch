@@ -1,30 +1,24 @@
-# EcoWatch Python Backend — requirements.txt (v4, pinned)
-# Install: pip install -r backend/requirements.txt
+# EcoWatch Python Backend — requirements.txt
+# Tested on Python 3.13 (Windows). Install: pip install -r backend/requirements.txt
+# Minimum versions below are the ones verified to work together; they all ship
+# pre-built wheels for Python 3.13 (no C compiler needed).
 
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-python-dotenv==1.0.1
-supabase==2.10.0
-pydantic==2.10.1
-httpx==0.27.2
-aiofiles==24.1.0
-pyotp==2.9.0
-psutil==6.1.0
+fastapi>=0.115.5
+uvicorn[standard]>=0.32.1
+python-dotenv>=1.0.1
+supabase>=2.10.0
+pydantic>=2.10.1
+httpx>=0.27.2
+aiofiles>=24.1.0
+pyotp>=2.9.0
+psutil>=6.1.0
 
-# Computer vision (A6: install separately if using GPU build)
-# CPU:    pip install opencv-python==4.10.0.84
-# Headless server: pip install opencv-python-headless==4.10.0.84
-opencv-python==4.10.0.84
+# Computer vision
+numpy>=2.0
+opencv-python>=4.10.0.84
+# YOLOv8 + ByteTrack (pulls in torch; install the CUDA build from pytorch.org if you have an NVIDIA GPU)
+ultralytics>=8.3.34
 
-# YOLOv8 + ByteTrack (auto-downloads bytetrack.yaml)
-ultralytics==8.3.34
-
-# Heavy ML deps — install GPU build from pytorch.org if CUDA available
-# CPU fallback:
-# torch>=2.2.0,<2.5
-# torchvision>=0.17.0,<0.20
-
-# Face recognition (auth router: extract-embedding / register-face / face-login)
-numpy>=1.26,<2.0
-insightface==0.7.3
-onnxruntime==1.20.1
+# Face recognition (identity pipeline + enrollment). First run downloads the buffalo_l model (~300 MB).
+insightface>=0.7.3
+onnxruntime>=1.20.1

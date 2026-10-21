@@ -16,6 +16,7 @@ export default function AdminAuthPage() {
 
   useEffect(() => {
     if (isAuthenticated && currentUser?.role === "admin") router.replace("/admin");
+    if (isAuthenticated && currentUser?.role === "super_admin") router.replace("/super");
   }, [isAuthenticated, currentUser, router]);
 
   const handleLogin = async () => {
@@ -30,15 +31,18 @@ export default function AdminAuthPage() {
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Invalid credentials."); return; }
       setSuccess(true);
+      const isSuper = data.admin.role === "super_admin";
       setCurrentUser({
         id:          data.admin.id,
-        role:        "admin",
+        role:        isSuper ? "super_admin" : "admin",
         name:        data.admin.name,
         email:       data.admin.email,
         ward:        data.admin.ward_jurisdiction,
         designation: data.admin.designation,
+        token:       data.token,
+        must_change: !!data.admin.must_change_password,
       });
-      setTimeout(() => router.push("/admin"), 1200);
+      setTimeout(() => router.push(isSuper ? "/super" : "/admin"), 1200);
     } catch (e: any) {
       setError("Login failed: " + e.message);
     } finally { setLoading(false); }
@@ -102,7 +106,7 @@ export default function AdminAuthPage() {
             <input
               type="text"
               maxLength={6}
-              placeholder="2FA PIN (123456 for demo)"
+              placeholder="2FA code (only if enabled for your account)"
               value={form.totp}
               onChange={e => setForm(f => ({ ...f, totp: e.target.value.replace(/\D/g, "").slice(0,6) }))}
               className="input-civic pl-9 font-mono tracking-[0.3em]"
@@ -125,7 +129,8 @@ export default function AdminAuthPage() {
           </button>
 
           <div className="pt-2 border-t border-white/8 text-center text-xs text-slate-500 space-y-1">
-            <p>Demo: <span className="text-blue-400 font-mono">admin@bbmp.gov.in</span> / <span className="text-blue-400 font-mono">admin123</span> / 2FA: <span className="text-blue-400 font-mono">123456</span></p>
+            <p>Demo: <span className="text-blue-400 font-mono">admin@bbmp.gov.in</span> / <span className="text-blue-400 font-mono">admin123</span></p>
+            <p className="text-amber-300/80">Municipal Commissioner (Super Admin) signs in here too and is taken to the Super Admin portal.</p>
           </div>
         </div>
       </div>

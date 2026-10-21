@@ -24,14 +24,17 @@ import numpy as np
 from backend.security import send_sms, utcnow_iso
 
 # ── Configuration ────────────────────────────────────────────────────────────
-FACE_MATCH_THRESHOLD   = float(os.getenv("FACE_MATCH_THRESHOLD", "0.50"))   # cosine similarity for MATCH
-FACE_REVIEW_THRESHOLD  = float(os.getenv("FACE_REVIEW_THRESHOLD", "0.38"))  # below this: NO_MATCH, between: UNCERTAIN
+# Calibrated on this webcam: enrolled user vs. own evidence frame = 0.575 (2026-10-18 rehearsal);
+# ArcFace (buffalo_l) different-person similarity is typically < 0.3. A clear margin over the
+# runner-up is also required (FACE_MATCH_MARGIN), so 0.45 is not a loose match.
+FACE_MATCH_THRESHOLD   = float(os.getenv("FACE_MATCH_THRESHOLD", "0.45"))   # cosine similarity for MATCH
+FACE_REVIEW_THRESHOLD  = float(os.getenv("FACE_REVIEW_THRESHOLD", "0.32"))  # below this: NO_MATCH, between: UNCERTAIN
 FACE_MATCH_MARGIN      = float(os.getenv("FACE_MATCH_MARGIN", "0.08"))      # top1 - top2 gap required
 FACE_MIN_PX            = int(os.getenv("FACE_MIN_PX", "70"))                # min face width in pixels
 FACE_MIN_DET_SCORE     = float(os.getenv("FACE_MIN_DET_SCORE", "0.60"))
 FACE_MIN_BLUR_VAR      = float(os.getenv("FACE_MIN_BLUR_VAR", "25"))        # Laplacian variance of face region
 FACE_MAX_YAW_DEG       = float(os.getenv("FACE_MAX_YAW_DEG", "50"))
-FINE_AMOUNT            = float(os.getenv("LITTERING_FINE_AMOUNT", "200"))
+FINE_AMOUNT            = float(os.getenv("LITTERING_FINE_AMOUNT", "500"))
 PUBLIC_BACKEND_URL     = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000")
 CAMERA_SECTOR_ID       = os.getenv("CAMERA_SECTOR_ID", "")
 
@@ -152,6 +155,54 @@ def identify(sb, face_crops: List[str]) -> IdentityResult:
         return IdentityResult(status="ERROR", reason=f"FACE_MODEL_ERROR: {e}", crops_received=n, notes=notes)
 
 
+# ── Awareness messages (a different one for each violation) ──────────────────
+# Each message is two short points: why littering harms the city/environment + what to do.
+AWARENESS_MESSAGES: List[str] = [
+    "• A plastic bottle takes ~450 years to break down; littered plastic ends up in drains and lakes.\n"
+    "• Please carry your waste to the nearest bin - clean streets start with you.",
+    "• Litter blocks storm-water drains and causes flooding during the monsoon.\n"
+    "• Hold on to your waste until you find a bin.",
+    "• Dumped waste collects rainwater and breeds mosquitoes that spread dengue and malaria.\n"
+    "• Keeping your street clean protects your family's health.",
+    "• Plastic breaks into microplastics that end up in our water and food.\n"
+    "• Choose reusable bottles and bags.",
+    "• Stray animals and birds eat littered packaging and plastic, often fatally.\n"
+    "• Dispose of food waste and wrappers properly.",
+    "• Littered waste cannot be segregated or recycled, so it ends up in landfills.\n"
+    "• Separate wet and dry waste and use the right bin.",
+    "• Cleaning littered streets costs the city money that comes from your taxes.\n"
+    "• Repeated violations are recorded on your civic profile.",
+    "• Burnt or dumped garbage releases toxic gases that worsen the air we breathe.\n"
+    "• Report illegal dumps on EcoWatch instead of adding to them.",
+    "• Waste that reaches lakes kills fish and damages the whole ecosystem.\n"
+    "• Every bottle in a bin is one less in a lake.",
+    "• Litter on roads can cause accidents for two-wheelers and pedestrians.\n"
+    "• Keep roads and footpaths free of waste.",
+    "• A clean neighbourhood is healthier, safer and more welcoming for everyone.\n"
+    "• Lead by example - others follow good habits.",
+    "• You can earn Eco-Points by reporting dumps and keeping your area clean.\n"
+    "• Use them to reduce fines or get rewards - instead of paying penalties.",
+]
+
+
+def pick_awareness_message(sb, citizen_id: str) -> str:
+    """Rotate through the messages so a citizen never gets the same one as their recent fines."""
+    used: List[str] = []
+    try:
+        rows = (sb.table("violations").select("awareness_message")
+                .eq("citizen_id", citizen_id).order("created_at", desc=True)
+                .limit(len(AWARENESS_MESSAGES)).execute().data) or []
+        used = [r["awareness_message"] for r in rows if r.get("awareness_message")]
+    except Exception as e:
+        print(f"[Identity] could not read previous messages: {e}")
+    start = len(used) % len(AWARENESS_MESSAGES)
+    for i in range(len(AWARENESS_MESSAGES)):
+        m = AWARENESS_MESSAGES[(start + i) % len(AWARENESS_MESSAGES)]
+        if m not in used:
+            return m
+    return AWARENESS_MESSAGES[start]
+
+
 # ── Violation creation (server-side, idempotent) ─────────────────────────────
 
 def _nearest_sector(sb, lat: Optional[float], lng: Optional[float]) -> Optional[str]:
@@ -206,6 +257,7 @@ def record_event(sb, event: Dict[str, Any], result: IdentityResult) -> Dict[str,
         "evidence_path":    evidence_dir,
         "identity_status":  "MATCHED" if matched else result.status,
         "sector_id":        _nearest_sector(sb, lat, lng),
+        "awareness_message": pick_awareness_message(sb, result.citizen_id) if matched else None,
     }
     try:
         ins = sb.table("violations").insert(row).execute()
@@ -223,7 +275,8 @@ def record_event(sb, event: Dict[str, Any], result: IdentityResult) -> Dict[str,
             vid = violation.get("id", "")
             msg = (f"A littering incident was detected involving your registered account at "
                    f"{loc.get('name') or 'a monitored location'}. Fine: ₹{FINE_AMOUNT:.0f}. "
-                   f"Violation ID: VIO-{str(vid)[:6].upper()}. You can pay or dispute from your dashboard.")
+                   f"Violation ID: VIO-{str(vid)[:6].upper()}. You can pay or dispute from your dashboard."
+                   + (f"\n\n{row['awareness_message']}" if row.get("awareness_message") else ""))
             note = {
                 "user_id": result.citizen_id, "type": "VIOLATION",
                 "title": "EcoWatch Violation", "message": msg,

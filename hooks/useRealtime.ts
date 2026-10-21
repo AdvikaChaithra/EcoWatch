@@ -42,7 +42,7 @@ export function useRealtime() {
             store.setTotalViolationsToday(store.totalViolationsToday + 1);
 
             store.showNotificationBanner(
-              `EcoWatch Alert: ${msg.citizen_name ?? "A citizen"} was detected littering at ${msg.location ?? "an unknown location"} on ${new Date().toLocaleString("en-IN")}. A fine of ₹200 has been issued.`
+              `EcoWatch Alert: ${msg.citizen_name ?? "A citizen"} was detected littering at ${msg.location ?? "an unknown location"} on ${new Date().toLocaleString("en-IN")}.`
             );
             if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
             bannerTimerRef.current = setTimeout(() => useEcoStore.getState().hideNotificationBanner(), 8000);

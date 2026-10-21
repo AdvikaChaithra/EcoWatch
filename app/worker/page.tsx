@@ -62,6 +62,8 @@ export default function WorkerDashboard() {
     try {
       await updateWorkerStatus(user.id, newStatus);
       setOnDuty(!onDuty);
+    } catch (e: any) {
+      alert(`Could not change shift status: ${e?.message ?? "database error"}. Please try again.`);
     } finally { setToggling(false); }
   }
 

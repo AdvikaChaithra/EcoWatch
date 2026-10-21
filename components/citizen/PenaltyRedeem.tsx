@@ -23,7 +23,7 @@ export function PenaltyRedeem({ points, onPointsChange }: { points: number; onPo
     if (!user?.id) return;
     const { data, error: e } = await supabase
       .from("violations").select("id,location_name,fine_amount,points_discount")
-      .eq("citizen_id", user.id).eq("status", "Pending").gt("fine_amount", 0);
+      .eq("citizen_id", user.id).in("status", ["Pending", "Upheld"]).gt("fine_amount", 0);
     if (e) { setError(errMsg(e, "Could not load your pending fines.")); return; }
     setItems((data ?? []) as Pending[]);
   }
@@ -50,7 +50,7 @@ export function PenaltyRedeem({ points, onPointsChange }: { points: number; onPo
       // 2) reduce the fine (only while still pending and unchanged)
       const { data: u, error: e2 } = await supabase.from("violations")
         .update({ fine_amount: Number(v.fine_amount) - discount, points_discount: Number(v.points_discount ?? 0) + discount })
-        .eq("id", v.id).eq("status", "Pending").eq("fine_amount", v.fine_amount).select("id");
+        .eq("id", v.id).in("status", ["Pending", "Upheld"]).eq("fine_amount", v.fine_amount).select("id");
       if (e2 || !u || u.length === 0) {
         await supabase.from("citizens").update({ eco_points: points }).eq("id", user.id); // roll back points
         throw e2 ?? new Error("This fine changed or was already paid; points were not spent.");

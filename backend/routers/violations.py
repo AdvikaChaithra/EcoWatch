@@ -12,6 +12,7 @@ from supabase import Client
 from backend.models import ViolationCreate, ViolationUpdate, PaymentRequest
 from backend.database import db, get_ws_manager
 from backend.security import require_api_key, utcnow_iso, send_sms
+from backend.identity import FINE_AMOUNT
 
 router = APIRouter(prefix="/api/violations", tags=["violations"])
 
@@ -60,7 +61,7 @@ async def create_violation(
         "location_name":    payload.location_name,
         "lat":              payload.lat,
         "lng":              payload.lng,
-        "fine_amount":      200,
+        "fine_amount":      FINE_AMOUNT,
         "status":           "Pending",
         "snapshot_url":     payload.evidence_dir,
         "confidence_score": payload.confidence_score,
@@ -96,7 +97,7 @@ async def create_violation(
         await send_sms(
             citizen_phone,
             f"EcoWatch Alert: You were detected littering at {payload.location_name}. "
-            f"Fine ₹200 issued. Pay at ecowatch.gov.in/citizen",
+            f"Fine ₹{FINE_AMOUNT:.0f} issued. Pay or dispute from your EcoWatch citizen dashboard.",
         )
 
     return violation
@@ -162,7 +163,7 @@ async def pay_fine(
         "type":         "payment",
         "violation_id": violation_id,
         "citizen_id":   violation.get("citizen_id"),
-        "amount":       violation.get("fine_amount", 200),
+        "amount":       violation.get("fine_amount", FINE_AMOUNT),
     })
 
     return {
@@ -172,7 +173,7 @@ async def pay_fine(
         "location":        violation.get("location_name"),
         "timestamp":       violation.get("timestamp"),
         "paid_at":         paid_at,
-        "fine_amount":     violation.get("fine_amount", 200),
+        "fine_amount":     violation.get("fine_amount", FINE_AMOUNT),
         "payment_method":  payload.payment_method,
         "transaction_ref": txn,
         "citizen_id":      violation.get("citizen_id"),

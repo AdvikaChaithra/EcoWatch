@@ -4,8 +4,7 @@ Shared Supabase client (lazy init) and WebSocket manager.
 Fails with a clear, named error message instead of crashing at import.
 """
 import os
-import sys
-from typing import Optional, Set
+from typing import Set
 from fastapi import WebSocket, HTTPException
 from dotenv import load_dotenv
 
@@ -45,7 +44,7 @@ def get_supabase():
         )
 
     try:
-        from supabase import create_client, Client  # type: ignore
+        from supabase import create_client  # type: ignore
         _supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
         return _supabase
     except ImportError:

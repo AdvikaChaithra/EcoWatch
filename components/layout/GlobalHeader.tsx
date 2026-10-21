@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Leaf, LayoutDashboard, HardHat, Camera, Bell, Wifi,
-  TrendingUp, ChevronDown, LogOut, User, Shield
+  ChevronDown, LogOut, User, Shield, Crown
 } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,6 @@ const NAV = [
 export function GlobalHeader() {
   const pathname = usePathname();
   const router = useRouter();
-  const civicIndex     = useEcoStore((s) => s.civicIndex);
   const liveAlerts     = useEcoStore((s) => s.liveAlerts);
   const totalViolations= useEcoStore((s) => s.totalViolationsToday);
   const workersOnDuty  = useEcoStore((s) => s.workersOnDuty);
@@ -33,11 +32,11 @@ export function GlobalHeader() {
   // Defer ALL user-state-dependent UI until after mount so server & client render identically.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+  // The Super Admin portal link is only shown to the super admin.
+  // Super Admin is always listed like the other portals; the /super page itself only admits
+  // the super admin (anyone else is sent to the admin login).
+  const navItems = [...NAV, { href: "/super", label: "Super Admin", icon: Crown, color: "text-amber-400" }];
 
-  const civicColor =
-    civicIndex >= 80 ? "text-green-400" :
-    civicIndex >= 60 ? "text-yellow-400" :
-    civicIndex >= 40 ? "text-orange-400" : "text-red-400";
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/8 bg-civic-950/95 backdrop-blur-xl">
@@ -61,7 +60,7 @@ export function GlobalHeader() {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-1">
-            {NAV.map(({ href, label, icon: Icon, color }) => (
+            {navItems.map(({ href, label, icon: Icon, color }) => (
               <Link
                 key={href}
                 href={href}
@@ -80,17 +79,6 @@ export function GlobalHeader() {
 
           {/* Right Side */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Civic Index — show static shell until mounted to avoid hydration mismatch */}
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">
-              <TrendingUp className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-xs text-slate-400">Civic Index</span>
-              {mounted
-                ? <span className={cn("text-sm font-bold", civicColor)}>{civicIndex}</span>
-                : <span className="text-sm font-bold text-slate-400">—</span>
-              }
-              <span className="text-xs text-slate-500">/100</span>
-            </div>
-
             {/* Live Stats */}
             {mounted && (
               <div className="hidden md:flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">
@@ -147,11 +135,11 @@ export function GlobalHeader() {
             ) : isAuthenticated && currentUser ? (
               <div className="flex items-center gap-2">
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">
-                  {currentUser.role === "admin"  && <Shield className="w-3.5 h-3.5 text-blue-400" />}
+                  {(currentUser.role === "admin" || currentUser.role === "super_admin") && <Shield className="w-3.5 h-3.5 text-blue-400" />}
                   {currentUser.role === "worker" && <HardHat className="w-3.5 h-3.5 text-yellow-400" />}
                   {currentUser.role === "citizen"&& <User    className="w-3.5 h-3.5 text-eco-400" />}
                   <span className="text-xs font-medium text-slate-200 max-w-[100px] truncate">{currentUser.name}</span>
-                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role}</span>
+                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role === "super_admin" ? "Super Admin" : currentUser.role}</span>
                 </div>
                 <button
                   onClick={() => { logout(); router.push("/"); }}
@@ -181,7 +169,7 @@ export function GlobalHeader() {
         {mobileOpen && (
           <div className="lg:hidden pb-3 border-t border-white/8 pt-2 mt-1">
             <div className="flex flex-col gap-1">
-              {NAV.map(({ href, label, icon: Icon, color }) => (
+              {navItems.map(({ href, label, icon: Icon, color }) => (
                 <Link
                   key={href}
                   href={href}

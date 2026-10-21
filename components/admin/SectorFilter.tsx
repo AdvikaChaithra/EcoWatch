@@ -18,6 +18,7 @@ export function SectorFilter() {
       .from("sectors")
       .select("id,area,name,admin_id")
       .eq("admin_id", user.id)
+      .eq("active", true)
       .order("area")
       .then(({ data, error }) => {
         if (error) console.warn("[SectorFilter] sectors unavailable (run migrations/001_demo.sql):", error.message);

@@ -57,8 +57,10 @@ export function SectorRanking() {
   if (error) return <p className="text-xs text-slate-500">{error}</p>;
   if (rows.length === 0) return null;
 
-  const most = rows.slice(0, 3);
-  const least = [...rows].reverse().slice(0, 3);
+  // Split so a sector never appears in both lists (e.g. 4 sectors -> top 2 / bottom 2).
+  const n = Math.max(1, Math.min(3, Math.floor(rows.length / 2)));
+  const most = rows.slice(0, n);
+  const least = [...rows].reverse().slice(0, n);
   const myRank = mine ? rows.findIndex((r) => r.sector.id === mine) + 1 : 0;
 
   const List = ({ title, icon, items, tone }: { title: string; icon: React.ReactNode; items: Row[]; tone: string }) => (

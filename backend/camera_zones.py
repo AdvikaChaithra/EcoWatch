@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 
 # ── Point-in-polygon (ray-casting) ────────────────────────────────────────────
@@ -79,7 +79,6 @@ class ZoneChecker:
         except Exception as e:
             print(f"[ZoneChecker] Failed to parse {json_path}: {e}")
 
-        count = len(bin_zones) + len(no_litter_zones)
         print(f"[ZoneChecker] Camera {camera_id}: "
               f"{len(bin_zones)} bin zone(s), {len(no_litter_zones)} no-litter zone(s) loaded.")
         return cls(bin_zones, no_litter_zones, camera_id)

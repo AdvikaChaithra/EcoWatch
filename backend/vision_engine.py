@@ -20,7 +20,6 @@ Changes from v4:
 from __future__ import annotations
 
 import base64
-import io
 import json
 import os
 import queue
@@ -31,6 +30,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
+# Windows Media Foundation can take ~30 s to open a webcam with hardware transforms on;
+# disabling them makes the camera open in about a second (must be set before importing cv2).
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+# Ultralytics otherwise checks PyPI / sends usage analytics at startup (slow on some networks).
+os.environ.setdefault("YOLO_OFFLINE", "1")
 import cv2
 import httpx
 import numpy as np
@@ -43,7 +47,8 @@ from backend.littering_detector import (
 )
 from backend.telemetry import TelemetryCollector
 
-load_dotenv()
+load_dotenv()                                             # cwd .env
+load_dotenv(Path(__file__).resolve().parent / ".env")     # backend/.env regardless of cwd
 
 # ── Camera ────────────────────────────────────────────────────────────────────
 _SRC          = os.getenv("CAMERA_SOURCE", "0")
@@ -55,19 +60,49 @@ CAMERA_LAT    = float(os.getenv("CAMERA_LATITUDE",  "12.9783"))
 CAMERA_LNG    = float(os.getenv("CAMERA_LONGITUDE", "77.6408"))
 CAMERA_LOC    = os.getenv("CAMERA_LOCATION_NAME", "Test Location")
 CAMERA_WARD   = os.getenv("CAMERA_WARD", "")
-SHOW_WINDOW   = os.getenv("SHOW_WINDOW", "true").lower() == "true"
+SHOW_WINDOW   = os.getenv("SHOW_WINDOW", "false").lower() == "true"   # extra OpenCV window costs CPU
+# Capture size + YOLO input size. 640x480 capture and imgsz=416 run ~6-7 FPS on a laptop CPU
+# (measured: imgsz 640 -> 3.4 FPS, 416 -> 6.5 FPS, 320 -> 10.6 FPS with yolov8n + ByteTrack).
+CAMERA_WIDTH  = int(os.getenv("CAMERA_WIDTH", "640"))
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
+YOLO_IMGSZ    = int(os.getenv("YOLO_IMGSZ", "416"))
+# Webcam driver: auto tries Media Foundation, then DirectShow, then OpenCV's default.
+CAMERA_BACKEND = os.getenv("CAMERA_BACKEND", "auto").lower()
+# A live camera that delivers only black frames this long is reopened (e.g. device contention).
+CAMERA_BLACK_SECONDS = float(os.getenv("CAMERA_BLACK_SECONDS", "3"))
+BLACK_MEAN_LEVEL = 3.0
 
 # ── Models (A6 + dual model) ─────────────────────────────────────────────────
 PERSON_MODEL_PATH = os.getenv("PERSON_MODEL_PATH", "yolov8n.pt")
 WASTE_MODEL_PATH  = os.getenv("WASTE_MODEL_PATH",  "yolov8n.pt")
+if WASTE_MODEL_PATH != PERSON_MODEL_PATH and not Path(WASTE_MODEL_PATH).exists():
+    # e.g. the open-vocabulary litter model hasn't been built yet (scripts/build_litter_model.py)
+    print(f"[Engine] WASTE_MODEL_PATH={WASTE_MODEL_PATH!r} not found - falling back to {PERSON_MODEL_PATH} "
+          f"(COCO litter classes only). Run: python scripts/build_litter_model.py")
+    WASTE_MODEL_PATH = PERSON_MODEL_PATH
 DUAL_MODEL        = WASTE_MODEL_PATH != PERSON_MODEL_PATH
+# Second (litter) model cost control: it is heavier (open-vocabulary YOLO-World), so it runs on
+# every Nth frame at a smaller input size; detections are reused in between (objects lying
+# still don't need 6 FPS, and the state machine tolerates short gaps).
+WASTE_EVERY_N     = max(1, int(os.getenv("WASTE_EVERY_N_FRAMES", "2")))
+WASTE_IMGSZ       = int(os.getenv("WASTE_IMGSZ", "320"))
+# Open-vocabulary scores are lower than closed-set YOLO scores for the same object.
+WASTE_MODEL_CONF  = float(os.getenv("WASTE_MODEL_CONF", "0.15"))
 
-_raw_ids        = os.getenv("WASTE_CLASS_IDS", "39,41")
+# COCO classes treated as potential litter (yolov8n is COCO-trained; it has NO class for
+# wrappers / plastic bags / loose paper - those need a litter-trained model, e.g. TACO).
+#   26 handbag (closest to a dumped bag) | 39 bottle 40 wine glass 41 cup 45 bowl
+#   42 fork 43 knife 44 spoon | 46 banana 47 apple 48 sandwich 49 orange 51 carrot
+#   52 hot dog 53 pizza 54 donut 55 cake | 73 book (paper / notebook)
+_DEFAULT_WASTE_IDS = "26,39,40,41,42,43,44,45,46,47,48,49,51,52,53,54,55,73"
+_raw_ids        = os.getenv("WASTE_CLASS_IDS", _DEFAULT_WASTE_IDS)
 TRASH_CLASS_IDS = set(int(x.strip()) for x in _raw_ids.split(",") if x.strip().isdigit())
 PERSON_CLASS_ID = 0
 
 PERSON_CONF = float(os.getenv("PERSON_CONF_THRESHOLD", "0.55"))
-TRASH_CONF  = float(os.getenv("TRASH_CONF_THRESHOLD",  "0.40"))
+# Bottles/cups are small for yolov8n at desk distance: 0.25 keeps them tracked frame-to-frame
+# (only waste classes are used, so false alarms stay low).
+TRASH_CONF  = float(os.getenv("TRASH_CONF_THRESHOLD",  "0.25"))
 
 # ── Littering config ──────────────────────────────────────────────────────────
 LITTER_CFG = LitteringConfig(
@@ -81,12 +116,15 @@ LITTER_CFG = LitteringConfig(
     timeout_seconds          = float(os.getenv("STATE_MACHINE_TIMEOUT_SECONDS",    "60")),
     cooldown_seconds         = float(os.getenv("VIOLATION_EVENT_COOLDOWN_SECONDS", "30")),
     grace_seconds            = float(os.getenv("TRACK_LOST_GRACE_SECONDS",         "0.7")),
+    waste_grace_seconds      = float(os.getenv("WASTE_LOST_GRACE_SECONDS",         "2.5")),
     carry_comotion_threshold = float(os.getenv("CARRY_COMOTION_THRESHOLD",         "0.4")),
     born_in_hand_window_s    = float(os.getenv("BORN_IN_HAND_WINDOW_S",            "1.0")),
     audit_log_path           = os.getenv("AUDIT_LOG_PATH", "logs/littering_candidates.jsonl"),
 )
 
-EVIDENCE_PRE_SECONDS = float(os.getenv("EVIDENCE_PRE_SECONDS", "4.0"))
+# 8 s so the frames where the person faced the camera while holding the item are still
+# buffered when the event is confirmed (drop -> leave -> 2 s dwell happens after that).
+EVIDENCE_PRE_SECONDS = float(os.getenv("EVIDENCE_PRE_SECONDS", "8.0"))
 EVIDENCE_DIR         = Path(os.getenv("EVIDENCE_DIR", "evidence_snapshots"))
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 Path("logs").mkdir(exist_ok=True)
@@ -211,9 +249,10 @@ class FrameRingBuffer:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MJPEGServer:
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, control=None):
         self._host  = host
         self._port  = port
+        self._control = control   # CameraSource: pause()/resume()/status for webcam sharing
         self._frame: Optional[bytes] = None
         self._lock  = threading.Lock()
 
@@ -248,9 +287,31 @@ class MJPEGServer:
                 continue
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
+    def _json(self, conn, code: int, body: dict):
+        data = json.dumps(body).encode()
+        conn.sendall(
+            f"HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\n"
+            f"Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n"
+            f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data
+        )
+
     def _handle(self, conn):
         try:
-            conn.recv(4096)
+            req = conn.recv(4096).decode("latin-1", "ignore")
+            path = req.split(" ", 2)[1] if req.count(" ") >= 2 else "/"
+            # Webcam sharing: on one laptop the browser (citizen/worker camera) and this engine
+            # cannot open the webcam at the same time, so the website asks us to release it.
+            if path.startswith("/camera/") and self._control is not None:
+                from urllib.parse import urlparse, parse_qs
+                u = urlparse(path)
+                if u.path == "/camera/pause":
+                    secs = float(parse_qs(u.query).get("seconds", ["120"])[0])
+                    self._control.pause(secs)
+                elif u.path == "/camera/resume":
+                    self._control.resume()
+                self._json(conn, 200, {"status": self._control.status,
+                                       "paused": self._control.is_paused()})
+                return
             conn.sendall(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
@@ -285,23 +346,79 @@ class CameraSource:
         self.status   = "STARTING"
         self.width    = 0
         self.height   = 0
+        self.backend  = ""
+        self._last_backend = ""
+        self._paused_until = 0.0
+        self._is_file = False
+        self._file_frame_dt = 0.0
+
+    def _backends(self) -> List[Tuple[str, Optional[int]]]:
+        if not isinstance(CAMERA_SOURCE, int):
+            return [("default", None)]                     # files / RTSP: let OpenCV choose
+        table = {"msmf": cv2.CAP_MSMF, "dshow": cv2.CAP_DSHOW, "default": None}
+        if CAMERA_BACKEND in table:
+            return [(CAMERA_BACKEND, table[CAMERA_BACKEND])]
+        order = ["msmf", "dshow", "default"] if os.name == "nt" else ["default"]
+        # after a failure, start from the backend after the one that failed
+        if self._last_backend in order:
+            i = order.index(self._last_backend)
+            order = order[i + 1:] + order[:i + 1]
+        return [(n, table[n]) for n in order]
 
     def open(self) -> bool:
-        cap = cv2.VideoCapture(CAMERA_SOURCE)
-        if not cap.isOpened():
-            self.status = "CAMERA_ERROR"
-            return False
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self._is_file = isinstance(CAMERA_SOURCE, str) and not CAMERA_SOURCE.lower().startswith(("rtsp://", "http://", "https://"))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        self._file_frame_dt = 1.0 / fps if (self._is_file and fps and fps > 1) else 0.0
-        self._cap   = cap
-        self.status = "CAMERA_READY"
-        return True
+        for name, api in self._backends():
+            cap = cv2.VideoCapture(CAMERA_SOURCE, api) if api is not None else cv2.VideoCapture(CAMERA_SOURCE)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            if not self._is_file:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)        # always read the newest frame
+            # Validate: a live webcam must deliver a non-black frame within ~1 s.
+            ok_frame = self._is_file or not isinstance(CAMERA_SOURCE, int)
+            for _ in range(20):
+                ret, f = cap.read()
+                if ret and f is not None and float(f.mean()) > BLACK_MEAN_LEVEL:
+                    ok_frame = True
+                    break
+            if not ok_frame:
+                print(f"[Camera] backend={name} opened but delivers black frames - trying next")
+                cap.release()
+                self._saw_black = True
+                continue
+            self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            self._file_frame_dt = 1.0 / fps if (self._is_file and fps and fps > 1) else 0.0
+            self._cap = cap
+            self._last_backend = name
+            self.backend = name
+            self.status = "CAMERA_READY"
+            print(f"[Camera] opened source={CAMERA_SOURCE!r} backend={name} {self.width}x{self.height}")
+            return True
+        self.status = "CAMERA_BLACK" if getattr(self, "_saw_black", False) else "CAMERA_ERROR"
+        self._saw_black = False
+        print("[Camera] could not get usable frames. Is another app (Zoom/Teams/browser) using the "
+              "webcam, or is the privacy shutter closed?")
+        return False
+
+    # ── webcam sharing (called from the MJPEG control thread; applied in _loop) ──
+    def pause(self, seconds: float = 120.0):
+        """Release the webcam for up to `seconds` (max 300) so another app can use it."""
+        if isinstance(CAMERA_SOURCE, int):
+            self._paused_until = time.time() + max(5.0, min(float(seconds), 300.0))
+            print(f"[Camera] paused for the website camera (auto-resume in {int(self._paused_until - time.time())}s)")
+
+    def resume(self):
+        if self._paused_until:
+            self._paused_until = 0.0
+            print("[Camera] resume requested")
+
+    def is_paused(self) -> bool:
+        return time.time() < self._paused_until
 
     def start(self):
         self._running = True
@@ -316,9 +433,27 @@ class CameraSource:
     def _loop(self):
         fails = 0
         while self._running:
-            if not self._cap or not self._cap.isOpened():
+            if self.is_paused():
+                if self._cap is not None:
+                    self._cap.release()
+                    self._cap = None
+                self.status = "CAMERA_PAUSED"
+                time.sleep(0.2)
+                continue
+            if self.status == "CAMERA_PAUSED":
+                # pause ended (resumed or timed out): give the browser a moment to let go, then reopen
                 self.status = "CAMERA_ERROR"
                 time.sleep(1.0)
+                if not self.open():
+                    time.sleep(2.0)
+                continue
+            if not self._cap or not self._cap.isOpened():
+                # Keep trying to (re)acquire the camera instead of giving up after one failure.
+                if self.status != "CAMERA_BLACK":
+                    self.status = "CAMERA_ERROR"
+                time.sleep(3.0)
+                if self._running:
+                    self.open()
                 continue
             ret, frame = self._cap.read()
             if self._is_file:
@@ -333,6 +468,22 @@ class CameraSource:
                 time.sleep(0.02)
                 continue
             fails = 0
+            # Black-frame watchdog (live cameras only): reopen instead of silently feeding black.
+            if not self._is_file and float(frame.mean()) <= BLACK_MEAN_LEVEL:
+                now_t = time.time()
+                self._black_since = getattr(self, "_black_since", 0.0) or now_t
+                if now_t - self._black_since > CAMERA_BLACK_SECONDS:
+                    self.status = "CAMERA_BLACK"
+                    print(f"[Camera] black frames for {CAMERA_BLACK_SECONDS:.0f}s on backend={self.backend} - reopening")
+                    self._cap.release()
+                    self._black_since = 0.0
+                    if not self.open():
+                        time.sleep(2.0)
+                    continue
+            else:
+                self._black_since = 0.0
+                if self.status == "CAMERA_BLACK":
+                    self.status = "CAMERA_READY"
             self.tel.record_camera_frame()
             try:
                 self.q.put_nowait(frame)
@@ -514,13 +665,17 @@ class VisionEngine:
         self.camera   = CameraSource(self.frame_q, self.telemetry)
 
         self.ring     = FrameRingBuffer(EVIDENCE_PRE_SECONDS, jpeg_quality=85)
-        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT)
+        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT, control=self.camera)
         self.writer   = EvidenceWriter()
         self.zones    = ZoneChecker.load("backend/camera_zones.json", CAMERA_ID)
         self.stitcher = WasteTrackStitcher()
         self.synth_tracker = SyntheticWasteTracker()
 
         self._running = False
+        self.waste_classes: List[int] = list(TRASH_CLASS_IDS)
+        self._frame_idx = 0
+        self._last_waste: List[dict] = []
+        self._waste_labels: Dict[int, str] = {}
         # Per-person-track recent (timestamp, bbox) so the offender's head can be cropped
         # from earlier frames at event time (no continuous face processing).
         self._person_hist: Dict[int, Deque[Tuple[float, Tuple[int, int, int, int]]]] = {}
@@ -604,6 +759,14 @@ class VisionEngine:
             self.person_model = YOLO(PERSON_MODEL_PATH)
             if DUAL_MODEL:
                 self.waste_model = YOLO(WASTE_MODEL_PATH)
+                names = self.waste_model.names
+                if "person" in names.values() and len(names) != 80:
+                    # open-vocabulary litter model: every vocabulary word except "person" is litter
+                    self.waste_classes = [i for i, n in names.items() if n != "person"]
+                    print(f"[Engine] Litter vocabulary ({len(self.waste_classes)}): "
+                          + ", ".join(names[i] for i in self.waste_classes))
+                else:
+                    self.waste_classes = list(TRASH_CLASS_IDS)
                 print(f"[Engine] Running DUAL model: person={PERSON_MODEL_PATH} waste={WASTE_MODEL_PATH}")
             else:
                 self.waste_model = None
@@ -612,11 +775,11 @@ class VisionEngine:
             # Warm-up
             dummy = np.zeros((480, 640, 3), dtype=np.uint8)
             all_cls = [PERSON_CLASS_ID] + ([] if DUAL_MODEL else list(TRASH_CLASS_IDS))
-            self.person_model.track(source=dummy, persist=True, verbose=False,
+            self.person_model.track(source=dummy, persist=True, verbose=False, imgsz=YOLO_IMGSZ,
                                     tracker="bytetrack.yaml", classes=all_cls)
             if DUAL_MODEL and self.waste_model:
-                self.waste_model.predict(source=dummy, verbose=False,
-                                         classes=list(TRASH_CLASS_IDS))
+                self.waste_model.predict(source=dummy, verbose=False, imgsz=WASTE_IMGSZ,
+                                         classes=self.waste_classes)
 
             self._post_status("YOLO_READY",
                 f"Ready | waste_classes={sorted(TRASH_CLASS_IDS)} | dual={DUAL_MODEL}")
@@ -699,7 +862,7 @@ class VisionEngine:
         # ── Person detection + tracking (always ByteTrack) ────────────────────
         person_classes = [PERSON_CLASS_ID] if DUAL_MODEL else [PERSON_CLASS_ID] + list(TRASH_CLASS_IDS)
         p_results = self.person_model.track(
-            source=frame, persist=True, tracker="bytetrack.yaml",
+            source=frame, persist=True, tracker="bytetrack.yaml", imgsz=YOLO_IMGSZ,
             verbose=False, classes=person_classes,
         )
 
@@ -717,32 +880,47 @@ class VisionEngine:
                 cx, cy = (x1+x2)//2, (y1+y2)//2
                 if cls == PERSON_CLASS_ID and conf >= PERSON_CONF:
                     ph = max(y2-y1, 10)
-                    persons.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy), "ph": ph})
+                    persons.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy), "ph": ph, "conf": conf})
                     cv2.rectangle(display, (x1,y1),(x2,y2), (0,255,255), 2)
                     cv2.putText(display, f"P#{tid} {conf:.2f}", (x1,y1-6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,255), 1)
                 elif not DUAL_MODEL and cls in TRASH_CLASS_IDS and conf >= TRASH_CONF:
-                    raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy)})
+                    raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy),
+                                       "conf": conf, "label": self.person_model.names.get(cls, str(cls))})
 
         self._update_person_history(persons, now)
 
         # ── Waste detection: second model path ────────────────────────────────
         if DUAL_MODEL and self.waste_model is not None:
-            w_results = self.waste_model.predict(
-                source=frame, verbose=False, classes=list(TRASH_CLASS_IDS),
-            )
-            waste_bboxes: List[Tuple[int,int,int,int]] = []
-            if w_results and w_results[0].boxes is not None:
-                for box in w_results[0].boxes:
-                    if float(box.conf[0]) < TRASH_CONF:
-                        continue
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    waste_bboxes.append((x1, y1, x2, y2))
-
-            synth_tracks = self.synth_tracker.update(waste_bboxes)
-            for (tid, (x1,y1,x2,y2)) in synth_tracks:
-                cx, cy = (x1+x2)//2, (y1+y2)//2
-                raw_wastes.append({"id": tid, "bbox": (x1,y1,x2,y2), "center": (cx,cy)})
+            self._frame_idx += 1
+            if self._frame_idx % WASTE_EVERY_N == 0 or not self._last_waste:
+                w_results = self.waste_model.predict(
+                    source=frame, verbose=False, imgsz=WASTE_IMGSZ, conf=WASTE_MODEL_CONF,
+                    classes=self.waste_classes,
+                )
+                waste_bboxes: List[Tuple[int,int,int,int]] = []
+                meta: Dict[Tuple[int,int,int,int], Tuple[float, str]] = {}
+                if w_results and w_results[0].boxes is not None:
+                    for box in w_results[0].boxes:
+                        conf = float(box.conf[0])
+                        if conf < WASTE_MODEL_CONF:
+                            continue
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        # ignore "litter" boxes that are really the person (open-vocab "bag" etc.)
+                        if any(_iou((x1, y1, x2, y2), p["bbox"]) > 0.6 for p in persons):
+                            continue
+                        waste_bboxes.append((x1, y1, x2, y2))
+                        meta[(x1, y1, x2, y2)] = (conf, self.waste_model.names.get(int(box.cls[0]), "object"))
+                synth_tracks = self.synth_tracker.update(waste_bboxes)
+                self._last_waste = []
+                for (tid, b) in synth_tracks:
+                    conf, label = meta.get(tuple(b), (None, self._waste_labels.get(tid, "object")))
+                    self._waste_labels[tid] = label
+                    self._last_waste.append({"id": tid, "bbox": tuple(b), "conf": conf, "label": label})
+            for w in self._last_waste:
+                x1, y1, x2, y2 = w["bbox"]
+                raw_wastes.append({"id": w["id"], "bbox": (x1,y1,x2,y2), "center": ((x1+x2)//2, (y1+y2)//2),
+                                   "conf": w["conf"], "label": w["label"]})
 
         # ── Stitch + update waste histories ──────────────────────────────────
         person_height_avg = (sum(p["ph"] for p in persons) / len(persons)) if persons else 80.0
@@ -851,7 +1029,7 @@ class VisionEngine:
             self._handle_event(result, (pid, wid), now)
 
         self._prune_pool(now)
-        self._update_pipeline_state(persons, wastes, now)
+        self._update_pipeline_state(persons, wastes, now, fw, fh)
 
         # Zone overlays
         for poly in self.zones.get_zones_for_overlay()["bin_zones"]:
@@ -893,15 +1071,32 @@ class VisionEngine:
             bar_w = int((x2-x1) * sm.dwell_progress)
             cv2.rectangle(display, (x1, y2+2), (x1+bar_w, min(y2+7, fh-1)), (255,140,0), -1)
 
-    def _update_pipeline_state(self, persons, wastes, now: float):
+    def _update_pipeline_state(self, persons, wastes, now: float, fw: int = 0, fh: int = 0):
         active = [{"person_id": pid, "waste_id": wid,
                    "state": sm.state.value, "dwell_progress": round(sm.dwell_progress, 2)}
                   for (pid, wid), sm in self._sm_pool.items()]
+
+        def _norm(b):  # pixel bbox -> 0..1 so the UI can draw it at any size
+            if not fw or not fh:
+                return list(b)
+            return [round(b[0] / fw, 4), round(b[1] / fh, 4), round(b[2] / fw, 4), round(b[3] / fh, 4)]
+
+        # Live detections of THIS frame (real YOLO + ByteTrack output; no images over WS).
+        detections = [
+            {"kind": "person", "track_id": p["id"], "label": "person",
+             "conf": round(p.get("conf", 0.0), 3), "bbox": _norm(p["bbox"])}
+            for p in persons[:15]
+        ] + [
+            {"kind": "waste", "track_id": w["id"], "label": w.get("label", "waste"),
+             "conf": round(w["conf"], 3) if w.get("conf") is not None else None, "bbox": _norm(w["bbox"])}
+            for w in wastes[:15]
+        ]
         with self._pipeline_lock:
             self._pipeline_state = {
                 "type": "pipeline_state", "camera_id": CAMERA_ID,
                 "timestamp": now, "person_count": len(persons),
                 "waste_count": len(wastes), "active_machines": active,
+                "detections": detections,
             }
 
     def _update_person_history(self, persons: List[dict], now: float):
@@ -1015,7 +1210,8 @@ class VisionEngine:
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def run(self):
-        print(f"\n[EcoWatch v5] dual_model={DUAL_MODEL} | SHOW_WINDOW={SHOW_WINDOW}")
+        print(f"\n[EcoWatch v5] dual_model={DUAL_MODEL} | SHOW_WINDOW={SHOW_WINDOW} | "
+              f"capture={CAMERA_WIDTH}x{CAMERA_HEIGHT} | yolo_imgsz={YOLO_IMGSZ}")
         print(f"[EcoWatch v5] waste_classes={sorted(TRASH_CLASS_IDS)}")
 
         if not self._load_models():
@@ -1023,12 +1219,15 @@ class VisionEngine:
 
         self._post_status("CAMERA_READY", f"Opening {CAMERA_SOURCE!r}")
         if not self.camera.open():
+            # Don't exit: the camera thread keeps retrying every few seconds (privacy shutter,
+            # dark room, or another app holding the webcam), and the UI shows CAMERA OFFLINE.
             self._post_status("CAMERA_ERROR",
-                f"Cannot open {CAMERA_SOURCE!r}. Check CAMERA_SOURCE.", error=True)
-            return
+                f"Cannot get frames from {CAMERA_SOURCE!r} yet - retrying automatically "
+                f"(check the lens/shutter/lighting and that no other app uses the webcam).", error=True)
 
-        self._post_status("CAMERA_READY",
-            f"{CAMERA_ID} | {self.camera.width}x{self.camera.height}")
+        if self.camera.status == "CAMERA_READY":
+            self._post_status("CAMERA_READY",
+                f"{CAMERA_ID} | {self.camera.width}x{self.camera.height}")
         self._post_status("TRACKER_READY", "ByteTrack + WasteTrackStitcher v2")
         self._post_status("EVENT_ENGINE_READY",
             f"SM v3 | dwell={LITTER_CFG.dwell_seconds}s | grace={LITTER_CFG.grace_seconds}s")
@@ -1060,6 +1259,8 @@ class VisionEngine:
                     cv2.imshow(f"EcoWatch v5 — {CAMERA_ID}", display)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
+        except KeyboardInterrupt:
+            print("[EcoWatch v5] Ctrl+C received - shutting down cleanly.")
         finally:
             self._running = False
             self.camera.stop()
@@ -1070,10 +1271,23 @@ class VisionEngine:
             print("[EcoWatch v5] Stopped.")
 
 
+def _iou(a, b) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    area = lambda r: max(0, r[2] - r[0]) * max(0, r[3] - r[1])
+    return inter / float(area(a) + area(b) - inter)
+
+
 def _eucl(a, b) -> float:
     import math
     return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
 
 
 if __name__ == "__main__":
-    VisionEngine().run()
+    try:
+        VisionEngine().run()
+    except KeyboardInterrupt:
+        print("[EcoWatch v5] Stopped.")

@@ -16,6 +16,7 @@ interface Violation {
   confidence_score: number; dispute_reason?: string;
   person_bbox?: number[] | null;
   evidence_path?: string | null; face_similarity?: number | null; identity_status?: string;
+  awareness_message?: string | null; lat?: number | null; lng?: number | null;
   trash_bbox?:  number[] | null;
   // Payment fields — populated after payment is made
   payment_method?: string; paid_at?: string; transaction_ref?: string;
@@ -150,7 +151,7 @@ export function ViolationHub() {
   const [actionLoading, setActionLoading] = useState(false);
   const [payMethod,     setPayMethod]     = useState("UPI / GPay");
   const [receipt,       setReceipt]       = useState<Receipt | null>(null);
-  const [newAlert,      setNewAlert]      = useState<string | null>(null);
+  const [newAlert,      setNewAlert]      = useState<{ text: string; awareness?: string | null } | null>(null);
 
   // Initial load
   useEffect(() => { loadViolations(); }, [user]); // eslint-disable-line
@@ -167,8 +168,11 @@ export function ViolationHub() {
           // Only show citizen's own violations (or all if no user filter)
           if (!user?.id || newVio.citizen_id === user.id) {
             setViolations((prev) => [newVio, ...prev]);
-            setNewAlert(`New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`);
-            setTimeout(() => setNewAlert(null), 6000);
+            setNewAlert({
+              text: `New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`,
+              awareness: newVio.awareness_message,
+            });
+            setTimeout(() => setNewAlert(null), 20000);
           }
         }
       )
@@ -180,8 +184,8 @@ export function ViolationHub() {
   async function loadViolations() {
     setLoading(true);
     try {
-      let q = supabase.from("violations").select("*").order("timestamp", { ascending: false });
-      if (user?.id) q = q.eq("citizen_id", user.id);
+      if (!user?.id) { setViolations([]); return; }
+      const q = supabase.from("violations").select("*").eq("citizen_id", user.id).order("timestamp", { ascending: false });
       const { data, error } = await q;
       if (error) throw error;
       setViolations(data ?? []);
@@ -206,7 +210,7 @@ export function ViolationHub() {
         payment_method:  payMethod,
         paid_at:         paidAt,
         transaction_ref: txnRef,
-      }).eq("id", selected.id).neq("status", "Paid").select("id");
+      }).eq("id", selected.id).in("status", ["Pending", "Upheld"]).select("id");
 
       if (error) throw error;
       if (!updated || updated.length === 0) throw new Error("This fine was already paid or is no longer available.");
@@ -260,14 +264,18 @@ export function ViolationHub() {
   return (
     <>
       {/* Real-time Violation Alert Banner */}
+      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
       {newAlert && (
         <div className="mb-4 flex items-start gap-3 p-4 rounded-2xl bg-red-900/90 border border-red-500/40 animate-fade-in-up">
-      <ErrorNote message={loadError} onDismiss={() => setLoadError("")} />
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5 animate-pulse" />
-          <div>
+          <div className="flex-1">
             <p className="text-xs font-bold text-red-400">📡 LIVE CAMERA DETECTION</p>
-            <p className="text-sm text-red-200 mt-0.5">{newAlert}</p>
+            <p className="text-sm text-red-200 mt-0.5">{newAlert.text}</p>
+            {newAlert.awareness && (
+              <div className="mt-2 text-xs text-red-100/90 whitespace-pre-line leading-relaxed">{newAlert.awareness}</div>
+            )}
           </div>
+          <button onClick={() => setNewAlert(null)} className="text-red-300 hover:text-white" aria-label="Dismiss alert"><X className="w-4 h-4" /></button>
         </div>
       )}
       <div className="space-y-4">
@@ -289,13 +297,27 @@ export function ViolationHub() {
             <table className="civic-table">
               <thead className="bg-civic-900/80">
                 <tr>
-                  <th>Violation ID</th><th>Date & Time</th><th>Location</th>
+                  <th>Evidence</th><th>Violation ID</th><th>Date & Time</th><th>Location</th>
                   <th>Fine</th><th>AI Confidence</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {violations.map((v) => (
                   <tr key={v.id}>
+                    <td>
+                      {v.snapshot_url ? (
+                        <button
+                          onClick={() => { setSelected(v); setModal("snapshot"); }}
+                          title="View camera evidence (3 frames)"
+                          className="block w-20 h-12 rounded-md overflow-hidden border border-white/10 hover:border-eco-400/60"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={v.snapshot_url} alt="Camera evidence" className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-600">—</span>
+                      )}
+                    </td>
                     <td className="font-mono text-xs text-slate-400">{v.id.slice(0, 8).toUpperCase()}</td>
                     <td className="text-xs">{formatDateTime(v.timestamp)}</td>
                     <td className="max-w-48 truncate text-xs">{v.location_name}</td>
@@ -311,15 +333,15 @@ export function ViolationHub() {
                         <button onClick={() => { setSelected(v); setModal("snapshot"); }} className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 hover:text-eco-400" title="View Snapshot">
                           <Eye className="w-4 h-4" />
                         </button>
+                        {(v.status === "Pending" || v.status === "Upheld") && (
+                          <button onClick={() => { setSelected(v); setModal("payment"); setReceipt(null); }} className="p-1.5 rounded-lg hover:bg-green-500/10 text-slate-400 hover:text-green-400" title="Pay Fine">
+                            <CreditCard className="w-4 h-4" />
+                          </button>
+                        )}
                         {v.status === "Pending" && (
-                          <>
-                            <button onClick={() => { setSelected(v); setModal("payment"); setReceipt(null); }} className="p-1.5 rounded-lg hover:bg-green-500/10 text-slate-400 hover:text-green-400" title="Pay Fine">
-                              <CreditCard className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => { setSelected(v); setModal("dispute"); }} className="p-1.5 rounded-lg hover:bg-orange-500/10 text-slate-400 hover:text-orange-400" title="Dispute">
-                              <FileText className="w-4 h-4" />
-                            </button>
-                          </>
+                          <button onClick={() => { setSelected(v); setModal("dispute"); }} className="p-1.5 rounded-lg hover:bg-orange-500/10 text-slate-400 hover:text-orange-400" title="Dispute">
+                            <FileText className="w-4 h-4" />
+                          </button>
                         )}
                         {v.status === "Paid" && (
                           <button
@@ -370,9 +392,10 @@ export function ViolationHub() {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   {[
                     { label: "Location",      value: selected.location_name },
+                    { label: "Coordinates",   value: selected.lat != null && selected.lng != null ? `${Number(selected.lat).toFixed(6)}, ${Number(selected.lng).toFixed(6)}` : "—" },
                     { label: "Captured",      value: formatDateTime(selected.timestamp) },
                     { label: "AI Confidence", value: `${(selected.confidence_score ?? 0).toFixed(1)}%` },
-                    { label: "Fine Amount",   value: formatCurrency(selected.fine_amount ?? 200) },
+                    { label: "Fine Amount",   value: formatCurrency(selected.fine_amount ?? 0) },
                   ].map(({ label, value }) => (
                     <div key={label} className="glass-card-sm p-3">
                       <p className="text-xs text-slate-400">{label}</p>
@@ -380,6 +403,12 @@ export function ViolationHub() {
                     </div>
                   ))}
                 </div>
+                {selected.awareness_message && (
+                  <div className="rounded-xl border border-eco-500/30 bg-eco-500/10 p-3">
+                    <p className="text-xs font-semibold text-eco-300 mb-1">🌱 Why this matters</p>
+                    <p className="text-xs text-slate-200 whitespace-pre-line leading-relaxed">{selected.awareness_message}</p>
+                  </div>
+                )}
               </div>
             )}
 
