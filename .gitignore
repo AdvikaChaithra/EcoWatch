@@ -69,6 +69,6 @@ yarn-error.log*
 # ── Claude Code working folders (local only) ──────────────────────────────────
 .claude/worktrees/
 .claude/work/
-
+.claude
 # local backups
 *.bak-before-merge
