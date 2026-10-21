@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { AlertTriangle, Camera, Map, Award, ClipboardList, UserCircle } from "lucide-react";
 import { ViolationHub } from "@/components/citizen/ViolationHub";
 import { ReportTool } from "@/components/citizen/ReportTool";
@@ -8,7 +8,6 @@ import { CivicHeatmap } from "@/components/citizen/CivicHeatmap";
 import { RewardsHub } from "@/components/citizen/RewardsHub";
 import { CitizenProfile } from "@/components/citizen/CitizenProfile";
 import { useEcoStore } from "@/lib/store";
-import { bootstrapGlobalStats } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -26,7 +25,6 @@ export default function CitizenDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("violations");
   const store = useEcoStore();
 
-  useEffect(() => { bootstrapGlobalStats(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const user = store.currentUser;
 

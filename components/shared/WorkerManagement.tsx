@@ -8,6 +8,7 @@ import { getBestPosition } from "@/lib/geo";
 import { ErrorNote } from "@/components/layout/ErrorNote";
 import { cn, statusColor } from "@/lib/utils";
 import { SectorOptions } from "@/components/shared/SectorOptions";
+import { Portal } from "@/components/shared/Portal";
 
 interface Sector { id: string; area: string; name: string; corporation?: string | null; admin_id: string | null; lat: number; lng: number; active?: boolean }
 interface Worker {
@@ -288,8 +289,15 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
   );
 }
 
+/** Dialog rendered into <body> (see Portal) so it is always centred on the screen. */
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
       <div className="w-full max-w-md glass-card p-5 space-y-3 animate-fade-in-up">
         <div className="flex items-center justify-between">
@@ -299,5 +307,6 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         {children}
       </div>
     </div>
+    </Portal>
   );
 }

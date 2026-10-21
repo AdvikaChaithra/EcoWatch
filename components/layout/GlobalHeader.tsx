@@ -5,7 +5,7 @@ import {
   Leaf, LayoutDashboard, HardHat, Camera, Bell, Wifi,
   ChevronDown, LogOut, User, Shield, Crown
 } from "lucide-react";
-import { useEcoStore } from "@/lib/store";
+import { useEcoStore, bootstrapGlobalStats } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
 
@@ -32,6 +32,12 @@ export function GlobalHeader() {
   // Defer ALL user-state-dependent UI until after mount so server & client render identically.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+  // Live counters from the database (every page, refreshed every 30 s) - not just after a websocket event.
+  useEffect(() => {
+    bootstrapGlobalStats();
+    const t = setInterval(bootstrapGlobalStats, 30_000);
+    return () => clearInterval(t);
+  }, []);
   // The Super Admin portal link is only shown to the super admin.
   // Super Admin is always listed like the other portals; the /super page itself only admits
   // the super admin (anyone else is sent to the admin login).

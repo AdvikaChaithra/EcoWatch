@@ -13,6 +13,12 @@ interface Sector { id: string; area: string; name: string; corporation: string |
 interface AdminLite { id: string; name: string; role: string; active: boolean }
 interface WorkerLite { id: string; name: string; employee_id: string; sector_id: string | null; active: boolean }
 
+const validCentre = (lat: unknown, lng: unknown) => {
+  if (String(lat ?? "").trim() === "" || String(lng ?? "").trim() === "") return false;
+  const a = Number(lat), o = Number(lng);
+  return Number.isFinite(a) && Number.isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180 && !(a === 0 && o === 0);
+};
+
 /**
  * Super admin: Bengaluru is pre-divided into sectors (real localities with OpenStreetMap centres,
  * grouped by city corporation - migrations/005). The job here is ASSIGNMENT: one responsible admin
@@ -79,9 +85,13 @@ export function SectorsManager() {
   async function act(s: Sector, body: Record<string, unknown>, label: string) {
     setBusy(s.id + label); setError(""); setInfo("");
     try {
-      const r = await authFetch<{ sector: Sector; workers_moved: number }>(`/api/super/sectors/${s.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const r = await authFetch<{ sector: Sector; workers_moved: number; rerouted?: { to: string; reports: number; violations: number } }>(
+        `/api/super/sectors/${s.id}`, { method: "PATCH", body: JSON.stringify(body) });
       setSectors((xs) => xs.map((x) => (x.id === s.id ? r.sector : x)));
-      setInfo(`${label} done for ${s.area} — ${s.name}${r.workers_moved ? ` (${r.workers_moved} worker(s) now report to ${adminName(r.sector.admin_id)})` : ""}.`);
+      const moved = r.workers_moved ? ` (${r.workers_moved} worker(s) now report to ${adminName(r.sector.admin_id)})` : "";
+      const handed = r.rerouted && (r.rerouted.reports || r.rerouted.violations)
+        ? ` Open work handed to ${sectorLabel(r.rerouted.to)}: ${r.rerouted.reports} report(s), ${r.rerouted.violations} violation(s).` : "";
+      setInfo(`${label} done for ${s.area} — ${s.name}${moved}.${handed}`);
       return true;
     } catch (e: any) { setError(e?.message ?? `${label} failed`); return false; }
     finally { setBusy(null); }
@@ -275,7 +285,7 @@ export function SectorsManager() {
             <button onClick={() => fillFromGps("form")} disabled={locating} className="flex items-center gap-1 text-xs text-eco-300 hover:text-eco-200 mr-auto">
               {locating ? <Loader2 className="w-3 h-3 animate-spin" /> : <MapPin className="w-3 h-3" />} Use this device&apos;s GPS as the centre
             </button>
-            <button onClick={create} disabled={busy === "add" || !form.area || !form.lat || !form.lng} className="btn-eco py-1.5 text-sm disabled:opacity-40">
+            <button onClick={create} disabled={busy === "add" || !form.area.trim() || !validCentre(form.lat, form.lng)} className="btn-eco py-1.5 text-sm disabled:opacity-40">
               {busy === "add" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Create sector
             </button>
           </div>
@@ -335,7 +345,8 @@ export function SectorsManager() {
           <button onClick={() => fillFromGps("edit")} disabled={locating} className="flex items-center gap-1 text-xs text-eco-300 hover:text-eco-200">
             {locating ? <Loader2 className="w-3 h-3 animate-spin" /> : <MapPin className="w-3 h-3" />} Use this device&apos;s GPS
           </button>
-          <button className="btn-eco w-full justify-center" disabled={busy === editing.id + "Update"}
+          <button className="btn-eco w-full justify-center disabled:opacity-40"
+                  disabled={busy === editing.id + "Update" || !String(editing.area).trim() || !validCentre(editing.lat, editing.lng)}
                   onClick={async () => { if (await act(editing, { action: "update", area: editing.area, name: editing.name, corporation: editing.corporation ?? "", lat: Number(editing.lat), lng: Number(editing.lng) }, "Update")) setEditing(null); }}>
             Save changes
           </button>

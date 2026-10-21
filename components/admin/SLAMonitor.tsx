@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { Timer, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
 import { getDumpReports, verifyReport, supabase } from "@/lib/supabase";
 import { cn, formatDateTime, severityColor, statusColor } from "@/lib/utils";
+import { Portal } from "@/components/shared/Portal";
 
 interface Report { id: string; category: string; severity: string; location_name: string; status: string; created_at: string; reported_image_url?: string; cleaned_image_url?: string; assigned_worker_id?: string; workers?: { name: string }; }
 
@@ -173,6 +174,7 @@ export function SLAMonitor() {
 
       {/* Verification Modal */}
       {selected && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-2xl glass-card p-6 animate-fade-in-up">
             <div className="flex items-center justify-between mb-5">
@@ -211,6 +213,7 @@ export function SLAMonitor() {
             )}
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );

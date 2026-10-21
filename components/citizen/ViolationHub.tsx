@@ -1,6 +1,6 @@
 "use client";
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   AlertTriangle, Eye, CreditCard, FileText, Loader2, X,
   CheckCircle2, Download, Printer
@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
 import { cn, formatDateTime, statusColor, formatCurrency } from "@/lib/utils";
+import { Portal } from "@/components/shared/Portal";
 
 interface Violation {
   id: string; citizen_id: string; timestamp: string; location_name: string;
@@ -153,33 +154,47 @@ export function ViolationHub() {
   const [receipt,       setReceipt]       = useState<Receipt | null>(null);
   const [newAlert,      setNewAlert]      = useState<{ text: string; awareness?: string | null } | null>(null);
 
+  const violationsRef = useRef<Violation[]>([]);
+  useEffect(() => { violationsRef.current = violations; }, [violations]);
+
   // Initial load
   useEffect(() => { loadViolations(); }, [user]); // eslint-disable-line
 
-  // ── Real-time Supabase subscription ──────────────────────────────────────
+  // ── Real-time Supabase subscription (this citizen's rows only) ─────────────
   useEffect(() => {
+    if (!user?.id) return;
+    const mine = `citizen_id=eq.${user.id}`;
     const channel = supabase
-      .channel("public:violations")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "violations" },
-        (payload) => {
-          const newVio = payload.new as Violation;
-          // Only show citizen's own violations (or all if no user filter)
-          if (!user?.id || newVio.citizen_id === user.id) {
-            setViolations((prev) => [newVio, ...prev]);
-            setNewAlert({
-              text: `New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`,
-              awareness: newVio.awareness_message,
-            });
-            setTimeout(() => setNewAlert(null), 20000);
-          }
+      .channel(`violations:${user.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "violations", filter: mine }, (payload) => {
+        const newVio = payload.new as Violation;
+        if (newVio.citizen_id !== user.id) return;
+        setViolations((prev) => (prev.some((x) => x.id === newVio.id) ? prev : [newVio, ...prev]));
+        setNewAlert({
+          text: `New violation detected at ${newVio.location_name} — Fine ₹${newVio.fine_amount}`,
+          awareness: newVio.awareness_message,
+        });
+        setTimeout(() => setNewAlert(null), 20000);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "violations", filter: mine }, (payload) => {
+        const upd = payload.new as Violation;
+        if (upd.citizen_id !== user.id) return;
+        const before = violationsRef.current.find((x) => x.id === upd.id)?.status;
+        setViolations((prev) => prev.map((x) => (x.id === upd.id ? { ...x, ...upd } : x)));
+        // dispute decided by the sector admin
+        if (before === "Disputed" && (upd.status === "Dismissed" || upd.status === "Upheld")) {
+          setNewAlert({
+            text: upd.status === "Dismissed"
+              ? `Your dispute for ${upd.location_name} was accepted — the fine is waived.`
+              : `Your dispute for ${upd.location_name} was reviewed and the ₹${upd.fine_amount} fine was upheld. You can pay it from this page.`,
+          });
+          setTimeout(() => setNewAlert(null), 20000);
         }
-      )
+      })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user]); // eslint-disable-line
+  }, [user?.id]);
 
   async function loadViolations() {
     setLoading(true);
@@ -376,6 +391,7 @@ export function ViolationHub() {
 
       {/* Modals */}
       {modal && selected && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-lg glass-card p-6 animate-fade-in-up">
             <div className="flex items-center justify-between mb-4">
@@ -500,6 +516,7 @@ export function ViolationHub() {
             )}
           </div>
         </div>
+        </Portal>
       )}
     </>
   );

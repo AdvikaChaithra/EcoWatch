@@ -6,6 +6,7 @@ import { getDumpReports, getWorkers, assignWorkerToReport } from "@/lib/supabase
 import { haversineMeters } from "@/lib/supabase";
 import { cn, formatDate, severityColor, statusColor } from "@/lib/utils";
 import { useSectorScope } from "@/hooks/useSectorScope";
+import { Portal } from "@/components/shared/Portal";
 
 interface Report { id: string; category: string; severity: string; location_name: string; lat: number; lng: number; status: string; created_at: string; reported_image_url?: string; }
 interface Worker { id: string; name: string; phone: string; ward: string; status: string; lat?: number; lng?: number; tasks_completed: number; }
@@ -30,7 +31,7 @@ export function TaskDispatch() {
         getWorkers(),
       ]);
       setReports((rData ?? []).filter((r: Report) => r.status === "Submitted" && inScope((r as any).sector_id)));
-      setWorkers((wData ?? []).filter((w: Worker) => w.status === "On Duty" && inScope((w as any).sector_id)));
+      setWorkers((wData ?? []).filter((w: Worker) => w.status === "On Duty" && (w as any).active !== false && inScope((w as any).sector_id)));
       setError("");
     } catch (e) { setError(errMsg(e, "Could not load reports and workers.")); } finally { setLoading(false); }
   }
@@ -120,6 +121,7 @@ export function TaskDispatch() {
 
       {/* Dispatch Modal */}
       {selected && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-xl glass-card p-6 animate-fade-in-up max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
@@ -188,6 +190,7 @@ export function TaskDispatch() {
             )}
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );

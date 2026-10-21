@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 /** Super admin: most recent privileged actions. */
 export async function GET(req: NextRequest) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const { data, error } = await serverSupabase().from("audit_log").select("*")
       .order("created_at", { ascending: false }).limit(100);

@@ -63,40 +63,6 @@ export function verifySecret(secret: string, stored: string | null | undefined):
   return safeEqual(secret.trim(), s);
 }
 
-// ── TOTP (RFC 6238, SHA-1, 6 digits, 30s) ────────────────────────────────────
-function base32Decode(input: string): Buffer {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = "";
-  for (const ch of input.replace(/=+$/, "").replace(/\s/g, "").toUpperCase()) {
-    const v = alphabet.indexOf(ch);
-    if (v < 0) throw new Error("Invalid base32 secret");
-    bits += v.toString(2).padStart(5, "0");
-  }
-  const bytes: number[] = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
-  return Buffer.from(bytes);
-}
-
-export function verifyTotp(secret: string, code: string, window = 1): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
-  let key: Buffer;
-  try {
-    key = base32Decode(secret);
-  } catch {
-    return false;
-  }
-  const counter = Math.floor(Date.now() / 1000 / 30);
-  for (let w = -window; w <= window; w++) {
-    const buf = Buffer.alloc(8);
-    buf.writeBigUInt64BE(BigInt(counter + w));
-    const h = crypto.createHmac("sha1", key).update(buf).digest();
-    const off = h[h.length - 1] & 0xf;
-    const num = (h.readUInt32BE(off) & 0x7fffffff) % 1_000_000;
-    if (safeEqual(num.toString().padStart(6, "0"), code)) return true;
-  }
-  return false;
-}
-
 export type EmbeddingResult =
   | { ok: true; embedding: number[] }
   | { ok: false; reason: "offline" | "no_face" | "error"; message: string };
@@ -187,11 +153,25 @@ export function verifySession(req: Request): Session | null {
   }
 }
 
-/** Returns the session if its role is allowed, otherwise a 401/403 response to return. */
-export function requireRole(req: Request, roles: SessionRole[]): Session | NextResponse {
+/**
+ * Returns the session if its role is allowed AND the account is still active with that role,
+ * otherwise a 401/403 response to return. Checking the database means deactivating an admin or
+ * worker (or changing an admin's role) takes effect immediately, not when their token expires.
+ */
+export async function requireRole(req: Request, roles: SessionRole[]): Promise<Session | NextResponse> {
   const s = verifySession(req);
   if (!s) return fail("Your session has expired. Please log in again.", 401);
   if (!roles.includes(s.role)) return fail("You are not allowed to do this.", 403);
+  const sb = serverSupabase();
+  const { data, error } = s.role === "worker"
+    ? await sb.from("workers").select("active").eq("id", s.sub).maybeSingle()
+    : await sb.from("admins").select("active, role").eq("id", s.sub).maybeSingle();
+  if (error) throw error;
+  const row = data as { active?: boolean; role?: string } | null;
+  if (!row || row.active === false) return fail("This account is no longer active. Please contact your administrator.", 403);
+  if (s.role !== "worker" && (row.role === "super_admin" ? "super_admin" : "admin") !== s.role) {
+    return fail("Your role has changed. Please log in again.", 401);
+  }
   return s;
 }
 

@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { getViolations, updateViolationStatus } from "@/lib/supabase";
 import { cn, formatDateTime, statusColor } from "@/lib/utils";
+import { Portal } from "@/components/shared/Portal";
 
 interface Violation { id: string; citizen_id: string; timestamp: string; location_name: string; fine_amount: number; status: string; confidence_score: number; dispute_reason?: string; snapshot_url?: string; evidence_path?: string | null; face_similarity?: number | null; }
 
@@ -42,8 +43,8 @@ export function DisputeTribunal() {
         reviewed_by: admin?.id ?? null,
         reviewed_at: new Date().toISOString(),
         admin_reason: dismiss ? "Dispute accepted after reviewing evidence" : "Dispute rejected after reviewing evidence",
-      });
-      setSuccess(dismiss ? "Penalty waived. Citizen notified." : "Fine upheld. Citizen dispute rejected.");
+      }, "Disputed");
+      setSuccess(dismiss ? "Penalty waived. The citizen sees the decision on their dashboard." : "Fine upheld. The citizen sees the decision on their dashboard.");
       setDisputes((d) => d.filter((x) => x.id !== selected.id));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2000);
     } catch (e) {
@@ -96,6 +97,7 @@ export function DisputeTribunal() {
 
       {/* Review Modal */}
       {selected && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-lg glass-card p-6 animate-fade-in-up">
             <div className="flex items-center justify-between mb-5">
@@ -142,6 +144,7 @@ export function DisputeTribunal() {
             )}
           </div>
         </div>
+        </Portal>
       )}
 
       {/* Littering events the camera confirmed but could NOT identify — no fine is issued */}

@@ -3,8 +3,10 @@ import Link from "next/link";
 import {
   Leaf, Camera, LayoutDashboard, HardHat, User,
   ShieldCheck, Zap, Map, Award, ArrowRight, TrendingUp,
-  AlertTriangle, CheckCircle2, Clock
+  AlertTriangle, CheckCircle2, ClipboardList
 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 const ROLES = [
   {
@@ -49,12 +51,32 @@ const ROLES = [
   },
 ];
 
-const STATS = [
-  { label: "Violations Today",   value: "847",  icon: AlertTriangle, color: "text-red-400"    },
-  { label: "Reports Resolved",   value: "2,341",icon: CheckCircle2,  color: "text-green-400"  },
-  { label: "Active Workers",     value: "128",  icon: HardHat,       color: "text-yellow-400" },
-  { label: "Avg. Response Time", value: "3.2h", icon: Clock,         color: "text-blue-400"   },
+type StatKey = "violationsToday" | "resolved" | "openReports" | "onDuty";
+const STATS: { key: StatKey; label: string; icon: typeof AlertTriangle; color: string }[] = [
+  { key: "violationsToday", label: "Violations Today",  icon: AlertTriangle, color: "text-red-400"    },
+  { key: "resolved",        label: "Reports Resolved",  icon: CheckCircle2,  color: "text-green-400"  },
+  { key: "openReports",     label: "Open Dump Reports", icon: ClipboardList, color: "text-blue-400"   },
+  { key: "onDuty",          label: "Workers On Duty",   icon: HardHat,       color: "text-yellow-400" },
 ];
+
+/** Live counts from the database (no placeholder numbers). */
+function useLiveStats() {
+  const [stats, setStats] = useState<Record<StatKey, number> | null>(null);
+  useEffect(() => {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const head = { count: "exact" as const, head: true };
+    Promise.all([
+      supabase.from("violations").select("id", head).gte("timestamp", start.toISOString()),
+      supabase.from("dump_reports").select("id", head).eq("status", "Cleaned & Verified"),
+      supabase.from("dump_reports").select("id", head).neq("status", "Cleaned & Verified"),
+      supabase.from("workers").select("id", head).eq("status", "On Duty").eq("active", true),
+    ]).then(([v, r, o, w]) => {
+      if (v.error || r.error || o.error || w.error) return;
+      setStats({ violationsToday: v.count ?? 0, resolved: r.count ?? 0, openReports: o.count ?? 0, onDuty: w.count ?? 0 });
+    });
+  }, []);
+  return stats;
+}
 
 const FEATURES = [
   { icon: Camera,     title: "YOLOv8 + ArcFace",    desc: "Real-time trash detection & face biometric offender identification at street level." },
@@ -66,6 +88,7 @@ const FEATURES = [
 ];
 
 export default function LandingPage() {
+  const stats = useLiveStats();
   return (
     <div className="relative overflow-hidden">
       {/* Hero */}
@@ -106,10 +129,10 @@ export default function LandingPage() {
 
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto stagger-children">
-            {STATS.map(({ label, value, icon: Icon, color }) => (
+            {STATS.map(({ key, label, icon: Icon, color }) => (
               <div key={label} className="glass-card-sm p-4 animate-fade-in-up">
                 <Icon className={`w-5 h-5 mb-2 mx-auto ${color}`} />
-                <div className={`text-2xl font-bold font-display mb-0.5 ${color}`}>{value}</div>
+                <div className={`text-2xl font-bold font-display mb-0.5 ${color}`}>{stats ? stats[key].toLocaleString("en-IN") : "—"}</div>
                 <div className="text-xs text-slate-400">{label}</div>
               </div>
             ))}

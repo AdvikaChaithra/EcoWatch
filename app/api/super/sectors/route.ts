@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: NextRequest) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, any>>(req);
     const area = String(b?.area ?? "").trim();
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
  */
 export async function PATCH(req: NextRequest) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, any>>(req);
     const corporation = String(b?.corporation ?? "").trim();

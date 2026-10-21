@@ -9,9 +9,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from supabase import Client
 
-from backend.models import ViolationCreate, ViolationUpdate, PaymentRequest
+from backend.models import ViolationUpdate, PaymentRequest
 from backend.database import db, get_ws_manager
-from backend.security import require_api_key, utcnow_iso, send_sms
+from backend.security import require_api_key, utcnow_iso
 from backend.identity import FINE_AMOUNT
 
 router = APIRouter(prefix="/api/violations", tags=["violations"])
@@ -44,63 +44,10 @@ async def list_violations(
     return _run(lambda: q.execute().data, "list violations")
 
 
-# ─── POST — Create Violation (from vision_engine.py) ──────────
-
-@router.post("", dependencies=[Depends(require_api_key)])
-async def create_violation(
-    payload: ViolationCreate,
-    sb: Client = Depends(db),
-    manager=Depends(get_ws_manager),
-):
-    """
-    Called when a litter violation is confirmed. Evidence frames are stored on disk
-    by the vision engine (served via /evidence); `evidence_dir` references them.
-    """
-    row = {
-        "citizen_id":       payload.citizen_id,
-        "location_name":    payload.location_name,
-        "lat":              payload.lat,
-        "lng":              payload.lng,
-        "fine_amount":      FINE_AMOUNT,
-        "status":           "Pending",
-        "snapshot_url":     payload.evidence_dir,
-        "confidence_score": payload.confidence_score,
-        "timestamp":        utcnow_iso(),
-    }
-    result = _run(lambda: sb.table("violations").insert(row).execute(), "create violation")
-    violation = result.data[0] if result.data else row
-
-    citizen_name = "Unknown Citizen"
-    citizen_phone = None
-    if payload.citizen_id:
-        try:
-            cr = sb.table("citizens").select("name,phone").eq("id", payload.citizen_id).execute()
-            if cr.data:
-                citizen_name = cr.data[0]["name"]
-                citizen_phone = cr.data[0]["phone"]
-        except Exception as e:
-            print(f"[DB] Citizen lookup failed for violation: {e}")
-
-    await manager.broadcast({
-        "type":             "violation",
-        "id":               violation.get("id", ""),
-        "location":         payload.location_name,
-        "citizen_name":     citizen_name,
-        "confidence_score": payload.confidence_score,
-        "snapshot_url":     payload.evidence_dir,
-        "timestamp":        row["timestamp"],
-        "person_bbox":      payload.person_bbox,
-        "trash_bbox":       payload.trash_bbox,
-    })
-
-    if citizen_phone:
-        await send_sms(
-            citizen_phone,
-            f"EcoWatch Alert: You were detected littering at {payload.location_name}. "
-            f"Fine ₹{FINE_AMOUNT:.0f} issued. Pay or dispute from your EcoWatch citizen dashboard.",
-        )
-
-    return violation
+# Violations are created ONLY by the identity pipeline (POST /api/littering_event in main.py ->
+# backend/identity.py): idempotent per event, fined only on a confident face MATCH, and the alert
+# goes to that citizen alone. The old direct "create violation" endpoint was removed because it
+# fined any citizen_id it was given and broadcast the citizen's name to every connected client.
 
 
 # ─── PATCH — Update Violation Status ──────────────────────────

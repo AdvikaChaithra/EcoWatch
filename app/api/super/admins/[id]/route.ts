@@ -9,7 +9,7 @@ const SAFE_COLS = "id, name, email, phone, admin_id, ward_jurisdiction, designat
  */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, any>>(req);
     const action = b?.action;

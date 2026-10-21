@@ -154,9 +154,9 @@ export async function bootstrapGlobalStats() {
     startOfDay.setHours(0, 0, 0, 0);
     const today = startOfDay.toISOString();
     const [{ count: violations, error: e1 }, { count: reports, error: e2 }, { count: workers, error: e3 }] = await Promise.all([
-      supabase.from("violations").select("*", { count: "exact", head: true }).gte("timestamp", today),
-      supabase.from("dump_reports").select("*", { count: "exact", head: true }).not("status", "eq", "Cleaned & Verified"),
-      supabase.from("workers").select("*", { count: "exact", head: true }).eq("status", "On Duty"),
+      supabase.from("violations").select("id", { count: "exact", head: true }).gte("timestamp", today),
+      supabase.from("dump_reports").select("id", { count: "exact", head: true }).not("status", "eq", "Cleaned & Verified"),
+      supabase.from("workers").select("id", { count: "exact", head: true }).eq("status", "On Duty").eq("active", true),
     ]);
     if (e1 || e2 || e3) throw e1 || e2 || e3;
     store.setTotalViolationsToday(violations ?? 0);

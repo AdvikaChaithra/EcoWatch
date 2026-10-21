@@ -11,7 +11,7 @@ const PHONE_RE = /^\+?[0-9]{8,15}$/;
  */
 export async function POST(req: NextRequest) {
   try {
-    const s = requireRole(req, ["admin", "super_admin"]);
+    const s = await requireRole(req, ["admin", "super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, string>>(req);
     const name = (b?.name ?? "").trim();

@@ -4,7 +4,7 @@ import { serverSupabase, fail, serverError, readJson, verifySecret, hashSecret, 
 /** Admin / super admin changes their own password (required on first login). */
 export async function POST(req: NextRequest) {
   try {
-    const s = requireRole(req, ["admin", "super_admin"]);
+    const s = await requireRole(req, ["admin", "super_admin"]);
     if (s instanceof NextResponse) return s;
     const body = await readJson<{ current?: string; next?: string }>(req);
     const current = body?.current ?? "";

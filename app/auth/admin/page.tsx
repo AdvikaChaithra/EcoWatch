@@ -1,14 +1,14 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Mail, Lock, Key, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { Shield, Mail, Lock, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export default function AdminAuthPage() {
   const router = useRouter();
   const { setCurrentUser, isAuthenticated, currentUser } = useEcoStore();
-  const [form, setForm] = useState({ email: "", password: "", totp: "" });
+  const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading]   = useState(false);
   const [error,   setError]     = useState("");
   const [success, setSuccess]   = useState(false);
@@ -98,20 +98,6 @@ export default function AdminAuthPage() {
             <button onClick={() => setShowPwd(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
               {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
-          </div>
-
-          {/* 2FA PIN */}
-          <div className="relative">
-            <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input
-              type="text"
-              maxLength={6}
-              placeholder="2FA code (only if enabled for your account)"
-              value={form.totp}
-              onChange={e => setForm(f => ({ ...f, totp: e.target.value.replace(/\D/g, "").slice(0,6) }))}
-              className="input-civic pl-9 font-mono tracking-[0.3em]"
-              onKeyDown={e => e.key === "Enter" && handleLogin()}
-            />
           </div>
 
           {error && (

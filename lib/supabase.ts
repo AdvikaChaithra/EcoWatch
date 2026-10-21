@@ -112,13 +112,14 @@ export async function createViolation(payload: {
 export async function updateViolationStatus(
   id: string,
   status: "Pending" | "Paid" | "Disputed" | "Dismissed" | "Upheld",
-  extra?: Record<string, unknown>
+  extra?: Record<string, unknown>,
+  onlyIfStatus?: string
 ) {
-  const { error } = await supabase
-    .from("violations")
-    .update({ status, ...extra })
-    .eq("id", id);
+  let q = supabase.from("violations").update({ status, ...extra }).eq("id", id);
+  if (onlyIfStatus) q = q.eq("status", onlyIfStatus);
+  const { data, error } = await q.select("id");
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("This violation was already updated by someone else. Refresh to see its current status.");
 }
 
 // ─── Dump Reports ─────────────────────────────────────────────────────────────
@@ -185,11 +186,14 @@ export async function createDumpReport(payload: {
 }
 
 export async function assignWorkerToReport(reportId: string, workerId: string) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("dump_reports")
     .update({ assigned_worker_id: workerId, status: "Worker Assigned" })
-    .eq("id", reportId);
+    .eq("id", reportId)
+    .eq("status", "Submitted")
+    .select("id");
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("This report was already dispatched or is no longer open.");
 }
 
 export async function completeReport(
@@ -206,12 +210,22 @@ export async function completeReport(
   if (error) throw error;
 }
 
+/**
+ * Admin decision on a worker's cleanup proof. Only acts while the report is still awaiting
+ * verification, so a double click or two admins can't approve (and pay the bonus) twice.
+ * Rejection sends the report back to the dispatch queue with no worker attached.
+ */
 export async function verifyReport(reportId: string, approved: boolean) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("dump_reports")
-    .update({ status: approved ? "Cleaned & Verified" : "Submitted" })
-    .eq("id", reportId);
+    .update(approved
+      ? { status: "Cleaned & Verified" }
+      : { status: "Submitted", assigned_worker_id: null, cleaned_image_url: null })
+    .eq("id", reportId)
+    .eq("status", "Pending Verification")
+    .select("id");
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("This report was already reviewed or is no longer awaiting verification.");
 }
 
 // ─── Workers ──────────────────────────────────────────────────────────────────

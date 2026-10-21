@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useCallback } from "react";
-import { useEcoStore, LiveAlert } from "@/lib/store";
+import { useEcoStore } from "@/lib/store";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
 const MAX_BACKOFF_MS = 30_000;
@@ -8,7 +8,6 @@ const MAX_BACKOFF_MS = 30_000;
 export function useRealtime() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
   const unmountedRef = useRef(false);
 
@@ -28,25 +27,8 @@ export function useRealtime() {
           // Always read fresh state: this closure outlives many renders.
           const store = useEcoStore.getState();
 
-          if (msg.type === "violation") {
-            const alert: LiveAlert = {
-              id: msg.id || crypto.randomUUID(),
-              type: "violation",
-              message: `🚨 Litter violation detected — ${msg.location ?? "Unknown"}`,
-              location: msg.location,
-              timestamp: msg.timestamp ?? new Date().toISOString(),
-              citizenName: msg.citizen_name,
-              confidence: msg.confidence_score,
-            };
-            store.addLiveAlert(alert);
-            store.setTotalViolationsToday(store.totalViolationsToday + 1);
-
-            store.showNotificationBanner(
-              `EcoWatch Alert: ${msg.citizen_name ?? "A citizen"} was detected littering at ${msg.location ?? "an unknown location"} on ${new Date().toLocaleString("en-IN")}.`
-            );
-            if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
-            bannerTimerRef.current = setTimeout(() => useEcoStore.getState().hideNotificationBanner(), 8000);
-          }
+          // Fines are never announced globally with a citizen's name; each citizen gets their own
+          // alert in their dashboard (violations realtime + notifications table).
 
           if (msg.type === "littering_event") {
             // Vision-engine candidate (identity still pending) — surface as an alert only.
@@ -135,7 +117,6 @@ export function useRealtime() {
     return () => {
       unmountedRef.current = true;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);

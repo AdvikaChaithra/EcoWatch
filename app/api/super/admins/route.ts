@@ -10,7 +10,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 /** Super admin: list all admin accounts (no credential columns). */
 export async function GET(req: NextRequest) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const { data, error } = await serverSupabase().from("admins").select(SAFE_COLS).order("created_at");
     if (error) throw error;
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 /** Super admin: create a municipal admin. Returns a one-time temporary password (shown once). */
 export async function POST(req: NextRequest) {
   try {
-    const s = requireRole(req, ["super_admin"]);
+    const s = await requireRole(req, ["super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, string>>(req);
     const name = (b?.name ?? "").trim();

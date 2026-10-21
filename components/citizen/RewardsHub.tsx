@@ -6,6 +6,7 @@ import { Award, Star, ShoppingBag, Loader2, CheckCircle2, Zap, X } from "lucide-
 import { getRewards, supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { cn, tierColor, tierPoints } from "@/lib/utils";
+import { Portal } from "@/components/shared/Portal";
 
 interface Reward {
   id: string; title: string; category: string; points_cost: number; voucher_code: string; target_role: string;
@@ -104,6 +105,7 @@ export function RewardsHub() {
       <PenaltyRedeem points={ecoPoints} onPointsChange={setEcoPoints} />
       {/* FIX 3: Voucher Redemption Modal */}
       {voucherModal && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-sm glass-card p-6 animate-fade-in-up space-y-5">
             <div className="flex items-center justify-between">
@@ -132,6 +134,7 @@ export function RewardsHub() {
             </button>
           </div>
         </div>
+        </Portal>
       )}
 
       {/* Points Card */}

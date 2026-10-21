@@ -12,7 +12,7 @@ const PHONE_RE = /^\+?[0-9]{8,15}$/;
  */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const s = requireRole(req, ["admin", "super_admin"]);
+    const s = await requireRole(req, ["admin", "super_admin"]);
     if (s instanceof NextResponse) return s;
     const b = await readJson<Record<string, string>>(req);
     const action = b?.action;
@@ -63,6 +63,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (te) throw te;
     } else if (action === "deactivate") {
       update = { active: false, status: "Off Duty" };
+      // a deactivated worker's open tasks go back to the dispatch queue
+      const { error: te } = await sb.from("dump_reports").update({ assigned_worker_id: null, status: "Submitted" })
+        .eq("assigned_worker_id", params.id).in("status", ["Worker Assigned", "Cleaning in Progress"]);
+      if (te) throw te;
     } else if (action === "activate") {
       update = { active: true };
     } else {

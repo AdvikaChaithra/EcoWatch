@@ -4,7 +4,7 @@ import { serverSupabase, fail, serverError, readJson, verifySecret, hashSecret, 
 /** Worker changes their own 4-digit PIN (required after an admin issues a one-time PIN). */
 export async function POST(req: NextRequest) {
   try {
-    const s = requireRole(req, ["worker"]);
+    const s = await requireRole(req, ["worker"]);
     if (s instanceof NextResponse) return s;
     const body = await readJson<{ current?: string; next?: string }>(req);
     const current = body?.current ?? "";
