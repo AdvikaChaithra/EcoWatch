@@ -249,9 +249,10 @@ class FrameRingBuffer:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MJPEGServer:
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, control=None):
         self._host  = host
         self._port  = port
+        self._control = control   # CameraSource: pause()/resume()/status for webcam sharing
         self._frame: Optional[bytes] = None
         self._lock  = threading.Lock()
 
@@ -286,9 +287,31 @@ class MJPEGServer:
                 continue
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
+    def _json(self, conn, code: int, body: dict):
+        data = json.dumps(body).encode()
+        conn.sendall(
+            f"HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\n"
+            f"Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n"
+            f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data
+        )
+
     def _handle(self, conn):
         try:
-            conn.recv(4096)
+            req = conn.recv(4096).decode("latin-1", "ignore")
+            path = req.split(" ", 2)[1] if req.count(" ") >= 2 else "/"
+            # Webcam sharing: on one laptop the browser (citizen/worker camera) and this engine
+            # cannot open the webcam at the same time, so the website asks us to release it.
+            if path.startswith("/camera/") and self._control is not None:
+                from urllib.parse import urlparse, parse_qs
+                u = urlparse(path)
+                if u.path == "/camera/pause":
+                    secs = float(parse_qs(u.query).get("seconds", ["120"])[0])
+                    self._control.pause(secs)
+                elif u.path == "/camera/resume":
+                    self._control.resume()
+                self._json(conn, 200, {"status": self._control.status,
+                                       "paused": self._control.is_paused()})
+                return
             conn.sendall(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
@@ -325,6 +348,7 @@ class CameraSource:
         self.height   = 0
         self.backend  = ""
         self._last_backend = ""
+        self._paused_until = 0.0
         self._is_file = False
         self._file_frame_dt = 0.0
 
@@ -381,6 +405,21 @@ class CameraSource:
               "webcam, or is the privacy shutter closed?")
         return False
 
+    # ── webcam sharing (called from the MJPEG control thread; applied in _loop) ──
+    def pause(self, seconds: float = 120.0):
+        """Release the webcam for up to `seconds` (max 300) so another app can use it."""
+        if isinstance(CAMERA_SOURCE, int):
+            self._paused_until = time.time() + max(5.0, min(float(seconds), 300.0))
+            print(f"[Camera] paused for the website camera (auto-resume in {int(self._paused_until - time.time())}s)")
+
+    def resume(self):
+        if self._paused_until:
+            self._paused_until = 0.0
+            print("[Camera] resume requested")
+
+    def is_paused(self) -> bool:
+        return time.time() < self._paused_until
+
     def start(self):
         self._running = True
         self._thread  = threading.Thread(target=self._loop, daemon=True, name="cam-thread")
@@ -394,6 +433,20 @@ class CameraSource:
     def _loop(self):
         fails = 0
         while self._running:
+            if self.is_paused():
+                if self._cap is not None:
+                    self._cap.release()
+                    self._cap = None
+                self.status = "CAMERA_PAUSED"
+                time.sleep(0.2)
+                continue
+            if self.status == "CAMERA_PAUSED":
+                # pause ended (resumed or timed out): give the browser a moment to let go, then reopen
+                self.status = "CAMERA_ERROR"
+                time.sleep(1.0)
+                if not self.open():
+                    time.sleep(2.0)
+                continue
             if not self._cap or not self._cap.isOpened():
                 # Keep trying to (re)acquire the camera instead of giving up after one failure.
                 if self.status != "CAMERA_BLACK":
@@ -612,7 +665,7 @@ class VisionEngine:
         self.camera   = CameraSource(self.frame_q, self.telemetry)
 
         self.ring     = FrameRingBuffer(EVIDENCE_PRE_SECONDS, jpeg_quality=85)
-        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT)
+        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT, control=self.camera)
         self.writer   = EvidenceWriter()
         self.zones    = ZoneChecker.load("backend/camera_zones.json", CAMERA_ID)
         self.stitcher = WasteTrackStitcher()

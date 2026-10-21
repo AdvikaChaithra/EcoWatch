@@ -53,6 +53,7 @@ export function ReportTool() {
     // Fresh, best-accuracy fix at the moment of capture (stamped onto the photo)
     const fresh = await geo.fetchLocation();
     cam.captureFrame(fresh.lat ? { lat: fresh.lat, lng: fresh.lng!, address: fresh.address ?? undefined } : undefined);
+    cam.stopCamera(); // photo taken: release the webcam (hands it back to the AI camera engine)
   };
 
   const handleUpload = async (file: File | undefined) => {

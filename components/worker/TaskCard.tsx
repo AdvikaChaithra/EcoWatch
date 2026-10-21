@@ -127,6 +127,7 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
       lng:     gpsResult.lng  ?? task.lng,
       address: gpsResult.address     ?? task.location_name,
     });
+    cam.stopCamera(); // photo taken: release the webcam
   }
 
   if (success) {

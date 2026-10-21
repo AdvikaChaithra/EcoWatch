@@ -1,5 +1,6 @@
 "use client";
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
+import { borrowWebcam, returnWebcam } from "@/lib/webcamShare";
 
 export function useCamera() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -12,10 +13,18 @@ export function useCamera() {
   const startCamera = useCallback(async (facingMode: "user" | "environment" = "user") => {
     try {
       setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
+      // On the demo laptop the AI camera engine holds the webcam: ask it to release it first.
+      await borrowWebcam();
+      const constraints = { video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e: any) {
+        // the engine may still be letting go of the device - retry once
+        if (e?.name !== "NotReadableError" && !/in use|could not start/i.test(e?.message ?? "")) throw e;
+        await new Promise((r) => setTimeout(r, 1500));
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      }
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -23,6 +32,7 @@ export function useCamera() {
       }
       setActive(true);
     } catch (err: unknown) {
+      returnWebcam();
       setError((err as Error).message ?? "Camera access denied");
     }
   }, []);
@@ -34,6 +44,14 @@ export function useCamera() {
     }
     if (videoRef.current) videoRef.current.srcObject = null;
     setActive(false);
+    returnWebcam(); // hand the webcam back to the AI camera engine
+  }, []);
+
+  // Turn the webcam off (and hand it back) when the component using it unmounts.
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    returnWebcam();
   }, []);
 
   const captureFrame = useCallback((

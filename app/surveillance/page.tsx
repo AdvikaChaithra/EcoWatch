@@ -73,7 +73,7 @@ interface CameraConfig {
 type BootStage =
   | "OFFLINE" | "STARTING" | "YOLO_READY" | "CAMERA_READY"
   | "TRACKER_READY" | "EVENT_ENGINE_READY" | "SYSTEM_READY"
-  | "CAMERA_ERROR" | "CAMERA_BLACK" | "YOLO_ERROR";
+  | "CAMERA_ERROR" | "CAMERA_BLACK" | "CAMERA_PAUSED" | "YOLO_ERROR";
 
 const STAGE_COLOR: Record<string, string> = {
   OFFLINE:            "text-slate-500",
@@ -85,6 +85,7 @@ const STAGE_COLOR: Record<string, string> = {
   SYSTEM_READY:       "text-eco-400",
   CAMERA_ERROR:       "text-red-400",
   CAMERA_BLACK:       "text-red-400",
+  CAMERA_PAUSED:      "text-yellow-400",
   YOLO_ERROR:         "text-red-400",
 };
 
@@ -202,12 +203,12 @@ export default function SurveillanceDashboard() {
             camera_status:        msg.camera_status,
             camera_resolution:    msg.camera_resolution,
           });
-          if (msg.camera_status === "CAMERA_ERROR" || msg.camera_status === "CAMERA_BLACK") {
+          if (msg.camera_status === "CAMERA_ERROR" || msg.camera_status === "CAMERA_BLACK" || msg.camera_status === "CAMERA_PAUSED") {
             setBootStage(msg.camera_status);
           } else if (msg.camera_status === "CAMERA_READY" && (msg.camera_fps ?? 0) > 0) {
             // Engine was already running before this page opened (boot messages were missed),
             // or the camera recovered: live telemetry proves the pipeline is up.
-            setBootStage((s) => (s === "OFFLINE" || s === "CAMERA_ERROR" || s === "CAMERA_BLACK") ? "SYSTEM_READY" : s);
+            setBootStage((s) => (s === "OFFLINE" || s === "CAMERA_ERROR" || s === "CAMERA_BLACK" || s === "CAMERA_PAUSED") ? "SYSTEM_READY" : s);
           }
           return;
         }
@@ -424,8 +425,10 @@ export default function SurveillanceDashboard() {
             <CameraFeed
               bboxes={running ? bboxes : []}
               running={running}
-              cameraOffline={["CAMERA_ERROR", "CAMERA_BLACK"].includes(health.camera_status ?? "") || bootStage === "CAMERA_ERROR" || bootStage === "CAMERA_BLACK"}
-              offlineReason={(health.camera_status === "CAMERA_BLACK" || bootStage === "CAMERA_BLACK")
+              cameraOffline={["CAMERA_ERROR", "CAMERA_BLACK", "CAMERA_PAUSED"].includes(health.camera_status ?? "") || bootStage === "CAMERA_ERROR" || bootStage === "CAMERA_BLACK" || bootStage === "CAMERA_PAUSED"}
+              offlineReason={(health.camera_status === "CAMERA_PAUSED" || bootStage === "CAMERA_PAUSED")
+                ? "Camera paused: the website is using the laptop webcam (citizen photo / face enrollment / worker proof). Surveillance resumes automatically when that camera is closed."
+                : (health.camera_status === "CAMERA_BLACK" || bootStage === "CAMERA_BLACK")
                 ? "The webcam is sending only black frames. Check the lens/privacy shutter and lighting, and close other apps using the camera (Teams, Zoom, Camera app, browser tabs). The engine retries automatically."
                 : undefined}
               cameraId={camConfig?.camera_id ?? "CAM_01"}

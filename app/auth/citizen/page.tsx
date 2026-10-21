@@ -1,4 +1,5 @@
 "use client";
+import { borrowWebcam, returnWebcam } from "@/lib/webcamShare";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -203,14 +204,29 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
   const startCam = useCallback(async () => {
     setError("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" } });
+      // The AI camera engine may hold the laptop webcam: ask it to release it first.
+      await borrowWebcam();
+      const constraints = { video: { width: 1280, height: 720, facingMode: "user" } };
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e: any) {
+        if (e?.name !== "NotReadableError" && !/in use|could not start/i.test(e?.message ?? "")) throw e;
+        await new Promise((r) => setTimeout(r, 1500));   // engine still releasing - retry once
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      }
       streamRef.current = stream;
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
       setCamOn(true);
-    } catch (e: any) { setError("Camera denied: " + e.message); }
+    } catch (e: any) {
+      returnWebcam();
+      setError(/in use|not ?readable|could not start/i.test(`${e?.name} ${e?.message}`)
+        ? "The webcam is busy in another program. Close other apps using the camera and try again."
+        : "Camera denied: " + e.message);
+    }
   }, []);
 
-  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
+  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); returnWebcam(); }, []);
 
   const capture = () => {
     const v = videoRef.current; const c = canvasRef.current;
@@ -220,6 +236,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
     setCaptured(c.toDataURL("image/jpeg", 0.9));
     streamRef.current?.getTracks().forEach(t => t.stop());
     setCamOn(false);
+    returnWebcam(); // hand the webcam back to the AI camera engine
   };
 
   const handleRegister = async (e: React.FormEvent) => {
