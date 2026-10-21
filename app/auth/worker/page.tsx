@@ -39,6 +39,9 @@ export default function WorkerAuthPage() {
         employee_id: data.worker.employee_id,
         eco_points:  data.worker.eco_points,
         tier:        data.worker.tier,
+        sector_id:   data.worker.sector_id,
+        token:       data.token,
+        must_change: !!data.worker.must_change_pin,
       });
       setTimeout(() => router.push("/worker"), 1200);
     } catch (e: any) {

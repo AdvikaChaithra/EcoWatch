@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Leaf, LayoutDashboard, HardHat, Camera, Bell, Wifi,
-  ChevronDown, LogOut, User, Shield
+  ChevronDown, LogOut, User, Shield, Crown
 } from "lucide-react";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,10 @@ export function GlobalHeader() {
   // Defer ALL user-state-dependent UI until after mount so server & client render identically.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+  // The Super Admin portal link is only shown to the super admin.
+  const navItems = mounted && currentUser?.role === "super_admin"
+    ? [{ href: "/super", label: "Super Admin", icon: Crown, color: "text-amber-400" }, ...NAV]
+    : NAV;
 
 
   return (
@@ -56,7 +60,7 @@ export function GlobalHeader() {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-1">
-            {NAV.map(({ href, label, icon: Icon, color }) => (
+            {navItems.map(({ href, label, icon: Icon, color }) => (
               <Link
                 key={href}
                 href={href}
@@ -131,11 +135,11 @@ export function GlobalHeader() {
             ) : isAuthenticated && currentUser ? (
               <div className="flex items-center gap-2">
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/8">
-                  {currentUser.role === "admin"  && <Shield className="w-3.5 h-3.5 text-blue-400" />}
+                  {(currentUser.role === "admin" || currentUser.role === "super_admin") && <Shield className="w-3.5 h-3.5 text-blue-400" />}
                   {currentUser.role === "worker" && <HardHat className="w-3.5 h-3.5 text-yellow-400" />}
                   {currentUser.role === "citizen"&& <User    className="w-3.5 h-3.5 text-eco-400" />}
                   <span className="text-xs font-medium text-slate-200 max-w-[100px] truncate">{currentUser.name}</span>
-                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role}</span>
+                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role === "super_admin" ? "Super Admin" : currentUser.role}</span>
                 </div>
                 <button
                   onClick={() => { logout(); router.push("/"); }}
@@ -165,7 +169,7 @@ export function GlobalHeader() {
         {mobileOpen && (
           <div className="lg:hidden pb-3 border-t border-white/8 pt-2 mt-1">
             <div className="flex flex-col gap-1">
-              {NAV.map(({ href, label, icon: Icon, color }) => (
+              {navItems.map(({ href, label, icon: Icon, color }) => (
                 <Link
                   key={href}
                   href={href}

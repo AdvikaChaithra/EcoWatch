@@ -16,6 +16,7 @@ export default function AdminAuthPage() {
 
   useEffect(() => {
     if (isAuthenticated && currentUser?.role === "admin") router.replace("/admin");
+    if (isAuthenticated && currentUser?.role === "super_admin") router.replace("/super");
   }, [isAuthenticated, currentUser, router]);
 
   const handleLogin = async () => {
@@ -30,15 +31,18 @@ export default function AdminAuthPage() {
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) { setError(data.error || "Invalid credentials."); return; }
       setSuccess(true);
+      const isSuper = data.admin.role === "super_admin";
       setCurrentUser({
         id:          data.admin.id,
-        role:        "admin",
+        role:        isSuper ? "super_admin" : "admin",
         name:        data.admin.name,
         email:       data.admin.email,
         ward:        data.admin.ward_jurisdiction,
         designation: data.admin.designation,
+        token:       data.token,
+        must_change: !!data.admin.must_change_password,
       });
-      setTimeout(() => router.push("/admin"), 1200);
+      setTimeout(() => router.push(isSuper ? "/super" : "/admin"), 1200);
     } catch (e: any) {
       setError("Login failed: " + e.message);
     } finally { setLoading(false); }

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { supabase } from "./supabase";
 
-export type Role = "citizen" | "admin" | "worker" | "surveillance";
+export type Role = "citizen" | "admin" | "super_admin" | "worker" | "surveillance";
 
 export interface LiveAlert {
   id: string;
@@ -28,6 +28,11 @@ export interface AuthUser {
   eco_points?: number;
   tier?: string;
   designation?: string;
+  /** server-signed session token (sent as Bearer on privileged API calls) */
+  token?: string;
+  /** first login with a temporary password / one-time PIN: must change it before continuing */
+  must_change?: boolean;
+  sector_id?: string | null;
 }
 
 const STORAGE_KEY = "ecowatch_session";

@@ -1,4 +1,5 @@
 "use client";
+import { ForceChangeCredential } from "@/components/auth/ForceChangeCredential";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useEcoStore } from "@/lib/store";
@@ -28,5 +29,6 @@ export default function WorkerLayout({ children }: { children: React.ReactNode }
     );
   }
 
+  if (currentUser?.must_change) return <ForceChangeCredential kind="pin" />;
   return <>{children}</>;
 }
