@@ -48,7 +48,7 @@ export function KPIOverview() {
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
       const ids = filter === "all" ? mySectors.map((x) => x.id) : [filter];
-      const scoped = (q: any) => (restricted ? q.in("sector_id", ids) : q);   // eslint-disable-line @typescript-eslint/no-explicit-any
+      const scoped = (q: any) => (restricted ? q.in("sector_id", ids) : q);
       const FINED = ["Pending", "Upheld", "Paid", "Disputed"];   // a citizen was actually fined
 
       const [
