@@ -86,7 +86,7 @@ report photo and location; submit a **cleanup proof photo** (GPS geofence 50 m) 
 profile with points/bonus and rewards.
 
 **Admin** (`/admin`) — tabs: *Operations* (KPIs, weekly chart, live map), *Dispatch* (assign nearest on-duty
-worker to a submitted report), *SLA Monitor* (verify/reject cleanup proofs; bonus ₹200 + 100 points on approval),
+worker to a submitted report), *SLA Monitor* (verify/reject cleanup proofs; admin-set bonus ₹0–1000 + 40–200 points on approval),
 *Tribunal* (uphold/dismiss disputed fines), *Workforce* (create/deactivate workers), *My Profile*.
 
 **Surveillance** (`/surveillance`) — live MJPEG feed with real detections, boot stages, node telemetry
@@ -122,6 +122,9 @@ cosine match). Report status flow: *Submitted → Worker Assigned → (Cleaning 
 Cleaned & Verified* (reject returns to *Submitted*). Violation flow: *Pending → Paid | Disputed → Upheld | Dismissed*.
 
 ## 7. API reference (FastAPI, port 8000)
+
+> **Outdated section:** the old `/api/violations`, `/api/reports`, `/api/workers` and OTP/login REST routes listed
+> here were removed (the website's server routes in `app/api/*` replaced them). See the README, section 11.
 
 | Endpoint | Purpose |
 |---|---|

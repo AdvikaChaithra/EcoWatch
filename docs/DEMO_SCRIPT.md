@@ -23,7 +23,7 @@
    Pick the bottle up → no violation (PICKUP). Explain: waste visible ≠ littering; it needs the full sequence.
 2. Open a second browser window logged in as the citizen (`/citizen` → Violations tab). Keep it visible.
 3. Perform the drop. `/surveillance` shows LITTERING CONFIRMED → "IDENTIFYING…" → **IDENTITY: MATCHED**
-   (masked name, similarity %, fine ₹200). The citizen window shows the new violation instantly (Supabase Realtime)
+   (masked name, similarity %, fine ₹500). The citizen window shows the new violation instantly (Supabase Realtime)
    with the 3 evidence frames (holding → dropped → leaving).
 4. Show a **different citizen's** window: nothing appears (alert is account-specific).
 5. Citizen: open the violation → **Dispute** with a reason (or **Pay** — clearly a *demo payment*).
