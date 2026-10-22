@@ -210,23 +210,7 @@ export async function completeReport(
   if (error) throw error;
 }
 
-/**
- * Admin decision on a worker's cleanup proof. Only acts while the report is still awaiting
- * verification, so a double click or two admins can't approve (and pay the bonus) twice.
- * Rejection sends the report back to the dispatch queue with no worker attached.
- */
-export async function verifyReport(reportId: string, approved: boolean) {
-  const { data, error } = await supabase
-    .from("dump_reports")
-    .update(approved
-      ? { status: "Cleaned & Verified" }
-      : { status: "Submitted", assigned_worker_id: null, cleaned_image_url: null })
-    .eq("id", reportId)
-    .eq("status", "Pending Verification")
-    .select("id");
-  if (error) throw error;
-  if (!data || data.length === 0) throw new Error("This report was already reviewed or is no longer awaiting verification.");
-}
+// Admin approval of a worker's cleanup proof is server-side: POST /api/reports/[id]/verify.
 
 // ─── Workers ──────────────────────────────────────────────────────────────────
 

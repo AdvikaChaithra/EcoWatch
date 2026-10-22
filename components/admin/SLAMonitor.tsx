@@ -2,12 +2,19 @@
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useSectorScope } from "@/hooks/useSectorScope";
 import { useState, useEffect } from "react";
-import { Timer, CheckCircle2, XCircle, X, Loader2 } from "lucide-react";
-import { getDumpReports, verifyReport, supabase } from "@/lib/supabase";
+import { Timer, CheckCircle2, XCircle, X, Loader2, RefreshCw, ClipboardCheck, Eye } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { authFetch } from "@/lib/api";
+import { useEcoStore } from "@/lib/store";
+import { pointsFor, TASK_BONUS_RUPEES } from "@/lib/taskPoints";
 import { cn, formatDateTime, severityColor, statusColor } from "@/lib/utils";
 import { Portal } from "@/components/shared/Portal";
 
-interface Report { id: string; category: string; severity: string; location_name: string; status: string; created_at: string; reported_image_url?: string; cleaned_image_url?: string; assigned_worker_id?: string; workers?: { name: string }; }
+interface Report {
+  id: string; category: string; severity: string; location_name: string; status: string; created_at: string; updated_at?: string;
+  reported_image_url?: string; cleaned_image_url?: string; assigned_worker_id?: string; sector_id?: string | null;
+  workers?: { name: string; admin_id: string | null } | null;
+}
 
 /** Interactive draggable Before ↔ After image comparison slider */
 function BeforeAfterSlider({ beforeUrl, afterUrl }: { beforeUrl?: string; afterUrl?: string }) {
@@ -76,19 +83,31 @@ export function SLAMonitor() {
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
 
-  const { inScope, key: scopeKey } = useSectorScope();
+  const me = useEcoStore((s) => s.currentUser);
+  const { inScope, filter, key: scopeKey } = useSectorScope();
+  // An admin sees tasks in their sectors, plus (under "All my sectors") tasks done by their own workers.
+  const visible = (r: Report) => inScope(r.sector_id) || (filter === "all" && !!me?.id && r.workers?.admin_id === me.id);
+
   useEffect(() => { loadReports(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function loadReports() {
-    setLoading(true);
+  // Live: refresh when a worker submits proof (or another admin acts on a task).
+  useEffect(() => {
+    const ch = supabase.channel("sla-monitor")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dump_reports" }, () => loadReports(false))
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadReports(spinner = true) {
+    if (spinner) setLoading(true);
     try {
       const { data, error: qErr } = await supabase
         .from("dump_reports")
-        .select("*, workers(name)")
-        .in("status", ["Worker Assigned","Cleaning in Progress","Pending Verification"])
+        .select("*, workers(name, admin_id)")
+        .in("status", ["Worker Assigned", "Cleaning in Progress", "Pending Verification"])
         .order("created_at", { ascending: true });
       if (qErr) throw qErr;
-      setReports((data ?? []).filter((r: any) => inScope(r.sector_id)));
+      setReports(((data ?? []) as Report[]).filter(visible));
       setError("");
     } catch (e) { setError(errMsg(e, "Could not load active tasks.")); } finally { setLoading(false); }
   }
@@ -97,43 +116,80 @@ export function SLAMonitor() {
     if (!selected) return;
     setActionLoading(true);
     try {
-      await verifyReport(selected.id, approved);
-      if (approved && selected.assigned_worker_id) {
-        // Award worker bonus
-        const { data: worker, error: wErr } = await supabase.from("workers").select("tasks_completed, bonus_accrued, eco_points").eq("id", selected.assigned_worker_id).single();
-        if (wErr) throw wErr;
-        if (worker) {
-          const { error: uErr } = await supabase.from("workers").update({
-            tasks_completed: (worker.tasks_completed ?? 0) + 1,
-            bonus_accrued: Number(worker.bonus_accrued ?? 0) + 200,
-            eco_points: (worker.eco_points ?? 0) + 100,
-          }).eq("id", selected.assigned_worker_id);
-          if (uErr) throw uErr;
-        }
-      }
-      setSuccess(approved ? "Cleanup approved! Worker bonus of ₹200 credited." : "Rejected. Report re-dispatched to queue.");
-      setReports((r) => r.filter((x) => x.id !== selected.id));
+      const r = await authFetch<{ points: number; bonus: number; worker: string | null }>(
+        `/api/reports/${selected.id}/verify`, { method: "POST", body: JSON.stringify({ approved }) });
+      setSuccess(approved
+        ? `Cleanup approved. ${r.worker ?? "The worker"} earned ${r.points} eco-points and a ₹${r.bonus} bonus.`
+        : "Rejected. The report is back in the dispatch queue.");
+      setReports((xs) => xs.filter((x) => x.id !== selected.id));
       setTimeout(() => { setSelected(null); setSuccess(""); }, 2500);
     } catch (e) {
       setError(errMsg(e, "Could not complete verification. Please check the report and retry."));
+      setSelected(null);
     } finally { setActionLoading(false); }
   }
 
   if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 text-eco-400 animate-spin" /></div>;
 
+  const pending = reports.filter((r) => r.status === "Pending Verification")
+    .sort((a, b) => new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime());
+  const inProgress = reports.filter((r) => r.status !== "Pending Verification");
+
   return (
     <div className="space-y-4">
       <ErrorNote message={error} onDismiss={() => setError("")} />
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-display font-bold text-slate-100">SLA Monitor & Verification</h2>
-        <span className="badge bg-orange-500/10 text-orange-400 border-orange-500/20">{reports.length} active</span>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-xl font-display font-bold text-slate-100 mr-auto">SLA Monitor & Verification</h2>
+        <button onClick={() => loadReports()} className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 hover:text-slate-200" title="Refresh">
+          <RefreshCw className="w-4 h-4" />
+        </button>
+        <span className="badge bg-eco-500/10 text-eco-400 border-eco-500/20">{pending.length} to verify</span>
+        <span className="badge bg-orange-500/10 text-orange-400 border-orange-500/20">{inProgress.length} in progress</span>
       </div>
 
-      {reports.length === 0 ? (
-        <div className="glass-card p-12 text-center">
-          <Timer className="w-12 h-12 text-eco-400 mx-auto mb-3 opacity-40" />
-          <p className="text-slate-400">No tasks pending verification</p>
-        </div>
+      {/* ── Finished by workers: awaiting this admin's decision ── */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-semibold text-eco-300 flex items-center gap-2">
+          <ClipboardCheck className="w-4 h-4" /> Awaiting your verification ({pending.length})
+        </h3>
+        {pending.length === 0 ? (
+          <div className="glass-card p-6 text-center text-sm text-slate-500">
+            No finished tasks to check right now. When a worker uploads proof of a cleanup it appears here.
+          </div>
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-3">
+            {pending.map((r) => (
+              <div key={r.id} className="glass-card p-3 flex gap-3 border-eco-500/20">
+                <div className="w-24 h-20 rounded-lg overflow-hidden bg-civic-800 shrink-0">
+                  {r.cleaned_image_url
+                    ? <img src={r.cleaned_image_url} alt="After cleanup" className="w-full h-full object-cover" />
+                    : <div className="w-full h-full flex items-center justify-center text-2xl">📷</div>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={cn("badge text-[10px]", severityColor(r.severity))}>{r.severity}</span>
+                    <span className="text-sm font-semibold text-slate-100">{r.category}</span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5 line-clamp-1" title={r.location_name}>{r.location_name}</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {r.workers?.name ?? "Worker"} · submitted {formatDateTime(r.updated_at ?? r.created_at)}
+                  </p>
+                  <button onClick={() => setSelected(r)} className="btn-eco text-xs px-3 py-1 mt-2">
+                    <Eye className="w-3.5 h-3.5" /> Review &amp; approve
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Assigned, not finished yet ── */}
+      <h3 className="text-sm font-semibold text-orange-300 flex items-center gap-2 pt-2">
+        <Timer className="w-4 h-4" /> In progress ({inProgress.length})
+      </h3>
+      {inProgress.length === 0 ? (
+        <div className="glass-card p-6 text-center text-sm text-slate-500">No tasks are in progress.</div>
       ) : (
         <div className="glass-card overflow-hidden">
           <table className="civic-table">
@@ -143,11 +199,10 @@ export function SLAMonitor() {
                 <th>Worker</th>
                 <th>Status</th>
                 <th>SLA Timer</th>
-                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {reports.map((r) => (
+              {inProgress.map((r) => (
                 <tr key={r.id}>
                   <td>
                     <div>
@@ -158,13 +213,6 @@ export function SLAMonitor() {
                   <td className="text-sm">{r.workers?.name ?? <span className="text-slate-500">Unassigned</span>}</td>
                   <td><span className={cn("badge text-xs", statusColor(r.status))}>{r.status}</span></td>
                   <td><SlaTimer createdAt={r.created_at} /></td>
-                  <td>
-                    {r.status === "Pending Verification" && (
-                      <button onClick={() => setSelected(r)} className="btn-eco text-xs px-3 py-1.5">
-                        Verify
-                      </button>
-                    )}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -176,8 +224,8 @@ export function SLAMonitor() {
       {selected && (
         <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-2xl glass-card p-6 animate-fade-in-up">
-            <div className="flex items-center justify-between mb-5">
+          <div className="w-full max-w-2xl glass-card p-6 animate-fade-in-up max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-3">
               <h3 className="font-display font-bold text-lg text-slate-100">Verify Cleanup Proof</h3>
               <button onClick={() => setSelected(null)} className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
@@ -189,6 +237,10 @@ export function SLAMonitor() {
               </div>
             ) : (
               <>
+                <p className="text-xs text-slate-400 mb-3">
+                  <strong className="text-slate-200">{selected.category}</strong> ({selected.severity}) at {selected.location_name} ·
+                  cleaned by <strong className="text-slate-200">{selected.workers?.name ?? "worker"}</strong>
+                </p>
                 {/* ── Draggable Before / After Comparison Slider ── */}
                 <div className="mb-5">
                   <p className="text-xs text-slate-400 mb-2 text-center">
@@ -206,7 +258,7 @@ export function SLAMonitor() {
                   </button>
                   <button onClick={() => handleVerify(true)} disabled={actionLoading} className="btn-eco flex-1 justify-center">
                     {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                    Approve &amp; Credit ₹200 Bonus
+                    Approve · +{pointsFor(selected.severity)} pts &amp; ₹{TASK_BONUS_RUPEES}
                   </button>
                 </div>
               </>
@@ -218,4 +270,3 @@ export function SLAMonitor() {
     </div>
   );
 }
-

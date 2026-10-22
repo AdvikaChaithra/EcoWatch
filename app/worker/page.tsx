@@ -7,6 +7,7 @@ import { useEcoStore } from "@/lib/store";
 import { ShiftToggle } from "@/components/worker/ShiftToggle";
 import { TaskCard, type Task } from "@/components/worker/TaskCard";
 import { WorkerProfile } from "@/components/worker/WorkerProfile";
+import { WorkHistory } from "@/components/worker/WorkHistory";
 import { cn } from "@/lib/utils";
 
 export default function WorkerDashboard() {
@@ -16,7 +17,7 @@ export default function WorkerDashboard() {
   const [loading,   setLoading]   = useState(true);
   const [toggling,  setToggling]  = useState(false);
   const [worker,    setWorker]    = useState<{ name: string; ward: string; eco_points: number; bonus_accrued: number; tasks_completed: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<"tasks" | "profile">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "history" | "profile">("tasks");
 
   useEffect(() => {
     if (user?.id) {
@@ -107,12 +108,12 @@ export default function WorkerDashboard() {
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-civic-900/60 rounded-2xl border border-white/8">
-        {(["tasks", "profile"] as const).map((t) => (
+        {(["tasks", "history", "profile"] as const).map((t) => (
           <button key={t} onClick={() => setActiveTab(t)} className={cn(
             "flex-1 py-2.5 rounded-xl text-sm font-medium transition-all",
             activeTab === t ? "bg-yellow-600/15 text-yellow-300 border border-yellow-500/20" : "text-slate-400 hover:text-slate-200"
           )}>
-            {t === "tasks" ? `🧹 My Tasks (${tasks.length})` : "👷 Profile & Rewards"}
+            {t === "tasks" ? `🧹 My Tasks (${tasks.length})` : t === "history" ? "📜 Work History" : "👷 Profile & Rewards"}
           </button>
         ))}
       </div>
@@ -143,6 +144,10 @@ export default function WorkerDashboard() {
       )}
 
       {/* Profile & Rewards */}
+      {activeTab === "history" && user?.id && (
+        <WorkHistory workerId={user.id} />
+      )}
+
       {activeTab === "profile" && user?.id && (
         <WorkerProfile workerId={user.id} />
       )}
