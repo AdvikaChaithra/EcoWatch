@@ -14,17 +14,10 @@ export default function AdminAuthPage() {
   const [success, setSuccess]   = useState(false);
   const [showPwd, setShowPwd]   = useState(false);
 
-  // Where to go after login: back to AI Surveillance if that's where the user came from.
-  const nextPath = (isSuper: boolean) => {
-    const from = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("from") : null;
-    if (from === "surveillance") return "/surveillance";
-    return isSuper ? "/super" : "/admin";
-  };
-
   useEffect(() => {
-    if (isAuthenticated && currentUser?.role === "admin") router.replace(nextPath(false));
-    if (isAuthenticated && currentUser?.role === "super_admin") router.replace(nextPath(true));
-  }, [isAuthenticated, currentUser, router]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (isAuthenticated && currentUser?.role === "admin") router.replace("/admin");
+    if (isAuthenticated && currentUser?.role === "super_admin") router.replace("/super");
+  }, [isAuthenticated, currentUser, router]);
 
   const handleLogin = async () => {
     if (!form.email || !form.password) { setError("Email and password are required."); return; }
@@ -49,7 +42,7 @@ export default function AdminAuthPage() {
         token:       data.token,
         must_change: !!data.admin.must_change_password,
       });
-      setTimeout(() => router.push(nextPath(isSuper)), 1200);
+      setTimeout(() => router.push(isSuper ? "/super" : "/admin"), 1200);
     } catch (e: any) {
       setError("Login failed: " + e.message);
     } finally { setLoading(false); }
