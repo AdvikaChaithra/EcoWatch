@@ -76,7 +76,7 @@ docs/                    this guide, Part 2 prompt
 ## 4. What each portal does
 
 **Citizen** (`/citizen`) — tabs: *Violations* (see fines with evidence, pay via demo payment, dispute),
-*Report Dump* (in-app camera + GPS stamp + category/severity → +50 Eco-Points; duplicate reports within 15 m /
+*Report Dump* (in-app camera + GPS stamp + category/severity → +40 Eco-Points; duplicate reports within 15 m /
 24 h are blocked), *My Reports* (status tracking, before/after slider), *Civic Map* (heat/marker map of reports,
 place search), *Rewards* (redeem Eco-Points; tiers Bronze/Silver 500/Gold 2000/Eco-Champion 5000).
 Registration captures details + an optional face photo; the embedding is stored for the camera pipeline.

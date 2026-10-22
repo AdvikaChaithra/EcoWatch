@@ -62,7 +62,7 @@ async def create_report(
     sb: Client = Depends(db),
     manager=Depends(get_ws_manager),
 ):
-    """Creates a geo-tagged dump report, uploads the photo, awards +50 Eco-Points."""
+    """Creates a geo-tagged dump report, uploads the photo, awards +40 Eco-Points."""
     image_url = None
     image_warning = None
     if payload.reported_image_b64:
@@ -94,7 +94,7 @@ async def create_report(
     try:
         cr = sb.table("citizens").select("eco_points,tier").eq("id", payload.citizen_id).execute()
         if cr.data:
-            pts = (cr.data[0].get("eco_points") or 0) + 50
+            pts = (cr.data[0].get("eco_points") or 0) + 40   # same as REPORT_POINTS in lib/taskPoints.ts
             sb.table("citizens").update({"eco_points": pts, "tier": _calc_tier(pts)}).eq("id", payload.citizen_id).execute()
     except Exception as e:
         print(f"[DB] Eco-points award failed for citizen {payload.citizen_id}: {e}")

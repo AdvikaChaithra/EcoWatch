@@ -6,6 +6,7 @@ import { fileToJpegDataUrl } from "@/lib/image";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { createDumpReport, checkDuplicateReport, updateCitizenEcoPoints, getNearestSectorId } from "@/lib/supabase";
 import { TARGET_ACCURACY_M } from "@/lib/geo";
+import { REPORT_POINTS } from "@/lib/taskPoints";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -99,8 +100,8 @@ export function ReportTool() {
       });
 
       try {
-        await updateCitizenEcoPoints(user.id, 50);
-        setSuccess("Report submitted successfully! You've earned +50 Eco-Points 🌿");
+        await updateCitizenEcoPoints(user.id, REPORT_POINTS);
+        setSuccess(`Report submitted successfully! You've earned +${REPORT_POINTS} Eco-Points 🌿`);
       } catch (pointsErr) {
         console.error("[ReportTool] Eco-Points award failed:", pointsErr);
         setSuccess("Report submitted successfully! (Eco-Points could not be credited right now.)");
@@ -115,7 +116,7 @@ export function ReportTool() {
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <h2 className="text-xl font-display font-bold text-slate-100">Geo-Tagged Waste Report</h2>
-        <p className="text-sm text-slate-400 mt-0.5">Take or upload a photo, select the dump type, and submit. Earn +50 Eco-Points per report.</p>
+        <p className="text-sm text-slate-400 mt-0.5">Take or upload a photo, select the dump type, and submit. Earn +{REPORT_POINTS} Eco-Points per report.</p>
       </div>
 
       {success ? (
@@ -267,7 +268,7 @@ export function ReportTool() {
               className="btn-eco w-full justify-center disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              {loading ? "Submitting Report..." : "Submit Report (+50 Points)"}
+              {loading ? "Submitting Report..." : `Submit Report (+${REPORT_POINTS} Points)`}
             </button>
           </div>
         </div>

@@ -6,7 +6,7 @@ import { Timer, CheckCircle2, XCircle, X, Loader2, RefreshCw, ClipboardCheck, Ey
 import { supabase } from "@/lib/supabase";
 import { authFetch } from "@/lib/api";
 import { useEcoStore } from "@/lib/store";
-import { pointsFor, TASK_BONUS_RUPEES } from "@/lib/taskPoints";
+import { pointsFor, inRange, TASK_BONUS_RUPEES, TASK_BONUS_MIN, TASK_BONUS_MAX, TASK_POINTS_MIN, TASK_POINTS_MAX } from "@/lib/taskPoints";
 import { cn, formatDateTime, severityColor, statusColor } from "@/lib/utils";
 import { Portal } from "@/components/shared/Portal";
 
@@ -94,6 +94,17 @@ export function SLAMonitor() {
   const [selected, setSelected] = useState<Report | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
+  // Reward for this cleanup, chosen by the admin (pre-filled with the suggestion)
+  const [bonusIn, setBonusIn] = useState(String(TASK_BONUS_RUPEES));
+  const [pointsIn, setPointsIn] = useState("");
+  const bonusVal = inRange(bonusIn, TASK_BONUS_MIN, TASK_BONUS_MAX);
+  const pointsVal = inRange(pointsIn, TASK_POINTS_MIN, TASK_POINTS_MAX);
+
+  function openReview(r: Report) {
+    setSelected(r);
+    setBonusIn(String(TASK_BONUS_RUPEES));
+    setPointsIn(String(pointsFor(r.severity)));
+  }
 
   const me = useEcoStore((s) => s.currentUser);
   const { inScope, filter, key: scopeKey } = useSectorScope();
@@ -129,7 +140,7 @@ export function SLAMonitor() {
     setActionLoading(true);
     try {
       const r = await authFetch<{ points: number; bonus: number; worker: string | null }>(
-        `/api/reports/${selected.id}/verify`, { method: "POST", body: JSON.stringify({ approved }) });
+        `/api/reports/${selected.id}/verify`, { method: "POST", body: JSON.stringify(approved ? { approved, bonus: bonusVal, points: pointsVal } : { approved }) });
       setSuccess(approved
         ? `Cleanup approved. ${r.worker ?? "The worker"} earned ${r.points} eco-points and a ₹${r.bonus} bonus.`
         : "Rejected. The report is back in the dispatch queue.");
@@ -187,7 +198,7 @@ export function SLAMonitor() {
                     {r.workers?.name ?? "Worker"} · submitted {formatDateTime(r.updated_at ?? r.created_at)}
                   </p>
                   <LocationBadge source={r.proof_location_source} />
-                  <button onClick={() => setSelected(r)} className="btn-eco text-xs px-3 py-1 mt-2">
+                  <button onClick={() => openReview(r)} className="btn-eco text-xs px-3 py-1 mt-2">
                     <Eye className="w-3.5 h-3.5" /> Review &amp; approve
                   </button>
                 </div>
@@ -269,14 +280,35 @@ export function SLAMonitor() {
                     afterUrl={selected.cleaned_image_url}
                   />
                 </div>
+                {/* Reward for the worker if approved */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <label className="text-xs text-slate-400 space-y-1">
+                    <span>Bonus (₹{TASK_BONUS_MIN} – ₹{TASK_BONUS_MAX})</span>
+                    <input type="number" min={TASK_BONUS_MIN} max={TASK_BONUS_MAX} step={1} value={bonusIn}
+                           onChange={(e) => setBonusIn(e.target.value)}
+                           className={cn("input-civic", bonusVal === null && "border-red-500/60")} />
+                  </label>
+                  <label className="text-xs text-slate-400 space-y-1">
+                    <span>Eco-points ({TASK_POINTS_MIN} – {TASK_POINTS_MAX})</span>
+                    <input type="number" min={TASK_POINTS_MIN} max={TASK_POINTS_MAX} step={1} value={pointsIn}
+                           onChange={(e) => setPointsIn(e.target.value)}
+                           className={cn("input-civic", pointsVal === null && "border-red-500/60")} />
+                  </label>
+                  {(bonusVal === null || pointsVal === null) && (
+                    <p className="col-span-2 text-[11px] text-red-300">
+                      Enter whole numbers: bonus ₹{TASK_BONUS_MIN}–{TASK_BONUS_MAX}, eco-points {TASK_POINTS_MIN}–{TASK_POINTS_MAX}.
+                    </p>
+                  )}
+                </div>
                 <div className="flex gap-3">
                   <button onClick={() => handleVerify(false)} disabled={actionLoading} className="btn-danger flex-1 justify-center">
                     {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
                     Reject &amp; Re-dispatch
                   </button>
-                  <button onClick={() => handleVerify(true)} disabled={actionLoading} className="btn-eco flex-1 justify-center">
+                  <button onClick={() => handleVerify(true)} disabled={actionLoading || bonusVal === null || pointsVal === null}
+                          className="btn-eco flex-1 justify-center disabled:opacity-40">
                     {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                    Approve · +{pointsFor(selected.severity)} pts &amp; ₹{TASK_BONUS_RUPEES}
+                    Approve · +{pointsVal ?? "?"} pts &amp; ₹{bonusVal ?? "?"}
                   </button>
                 </div>
               </>
