@@ -2,12 +2,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useEcoStore } from "@/lib/store";
-import { Camera, Loader2 } from "lucide-react";
+import { Camera, Loader2, LogIn } from "lucide-react";
 
 /**
- * Surveillance layout — auth guard.
- * Allows admin AND surveillance roles.
- * Unauthenticated users → redirect to /auth/admin.
+ * Surveillance layout — auth guard. The live camera shows people's faces, so it is for
+ * municipal admins and the super admin only. Anyone else sees why, with a sign-in button
+ * that brings them back here after login (no silent redirect).
  */
 export default function SurveillanceLayout({ children }: { children: React.ReactNode }) {
   const { currentUser, isAuthenticated } = useEcoStore();
@@ -16,21 +16,25 @@ export default function SurveillanceLayout({ children }: { children: React.React
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
   const router = useRouter();
+  const allowed = isAuthenticated && !!currentUser && (currentUser.role === "admin" || currentUser.role === "super_admin");
 
-  useEffect(() => {
-    // Surveillance is for admins and surveillance-role users
-    if (!isAuthenticated || !currentUser) {
-      router.replace("/auth/admin?from=surveillance");
-    }
-  }, [isAuthenticated, currentUser, router]);
+  if (!mounted) {
+    return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 text-red-400 animate-spin" /></div>;
+  }
 
-  if (!mounted || !isAuthenticated || !currentUser) {
+  if (!allowed) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <Camera className="w-12 h-12 text-red-400/40" />
-        <p className="text-slate-400 text-sm">Authentication required for AI Surveillance access.</p>
-        <p className="text-slate-500 text-xs">Redirecting to Admin Login…</p>
-        <Loader2 className="w-5 h-5 text-red-400 animate-spin" />
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center px-4">
+        <Camera className="w-12 h-12 text-red-400/60" />
+        <h2 className="font-display text-2xl font-bold text-slate-100">AI Surveillance is for municipal admins</h2>
+        <p className="text-slate-400 text-sm max-w-md">
+          The live camera shows people&apos;s faces, so only admins and the Municipal Commissioner can open it.
+          {isAuthenticated && currentUser ? ` You are signed in as ${currentUser.name} (${currentUser.role.replace("_", " ")}).` : " You are not signed in."}
+        </p>
+        <button onClick={() => router.push("/auth/admin?from=surveillance")} className="btn-eco">
+          <LogIn className="w-4 h-4" /> Sign in as admin
+        </button>
+        <p className="text-xs text-slate-500">After signing in you will come straight back to AI Surveillance.</p>
       </div>
     );
   }
