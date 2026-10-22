@@ -1,1 +1,1 @@
-from backend.routers import auth, violations, reports, workers
+from backend.routers import auth  # noqa: F401

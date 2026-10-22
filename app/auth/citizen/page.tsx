@@ -9,6 +9,7 @@ import {
 import { useEcoStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+import { phoneVariants } from "@/lib/phone";
 
 type Tab = "login" | "register";
 
@@ -94,8 +95,8 @@ function EmailLoginForm({ setCurrentUser, router }: { setCurrentUser: (u: any) =
         .from("citizens")
         .select("id,name,phone,email,ward,eco_points,tier")
         .eq("email", email.trim().toLowerCase())
-        .eq("phone", phone.trim())
-        .single();
+        .in("phone", phoneVariants(phone))       // "+91 98765 43210" and "9876543210" both work
+        .maybeSingle();
 
       if (dbErr || !data) {
         setError("No account found with this email and phone combination. Check your details or register first.");
@@ -361,7 +362,7 @@ function RegisterForm({ setCurrentUser, router }: { setCurrentUser: (u: any) => 
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-500">Skipping face enrollment is fine — you can still login with email + phone.</p>
+            <p className="text-xs text-slate-500">Face enrollment is required to register. You log in with email + phone (not your face).</p>
           </div>
         )}
       </div>

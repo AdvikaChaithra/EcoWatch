@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Loader2, Users, MapPin, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
+import { useSectorScope } from "@/hooks/useSectorScope";
 
 const Map = dynamic(() => import("@/components/admin/OpsMapComponent"), {
   ssr: false,
@@ -29,7 +30,10 @@ export function OperationsHeatmap() {
   // useRealtime.ts now populates this via worker_location WebSocket events.
   const workerLocations = useEcoStore((s) => s.workerLocations);
 
-  useEffect(() => { loadData(); }, []);
+  // The admin's sectors (or the selected one), like the rest of the console.
+  const { restricted, mySectors, filter, key: scopeKey } = useSectorScope();
+  const me = useEcoStore((s) => s.currentUser);
+  useEffect(() => { loadData(); }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Merge incoming WS worker_location events into displayed markers
   useEffect(() => {
@@ -45,10 +49,17 @@ export function OperationsHeatmap() {
   async function loadData() {
     setLoading(true);
     try {
-      const [dRes, wRes] = await Promise.all([
-        supabase.from("dump_reports").select("lat,lng,severity,category,location_name").not("lat", "is", "null"),
-        supabase.from("workers").select("id,name,status,ward,lat,lng").eq("status", "On Duty").not("lat", "is", "null"),
-      ]);
+      const ids = filter === "all" ? mySectors.map((x) => x.id) : [filter];
+      // open dumps only (cleaned ones are history, not operations)
+      let dq = supabase.from("dump_reports").select("lat,lng,severity,category,location_name")
+        .not("lat", "is", "null").neq("status", "Cleaned & Verified");
+      let wq = supabase.from("workers").select("id,name,status,ward,lat,lng")
+        .eq("status", "On Duty").eq("active", true).not("lat", "is", "null");
+      if (restricted) {
+        dq = dq.in("sector_id", ids);
+        wq = filter === "all" && me?.id ? wq.eq("admin_id", me.id) : wq.in("sector_id", ids);
+      }
+      const [dRes, wRes] = await Promise.all([dq, wq]);
       if (dRes.error) throw dRes.error;
       if (wRes.error) throw wRes.error;
       setDumps(dRes.data ?? []);

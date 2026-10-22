@@ -4,6 +4,7 @@ Shared Supabase client (lazy init) and WebSocket manager.
 Fails with a clear, named error message instead of crashing at import.
 """
 import os
+import asyncio
 from typing import Set
 from fastapi import WebSocket, HTTPException
 from dotenv import load_dotenv
@@ -78,14 +79,23 @@ class ConnectionManager:
         self.active.discard(ws)
 
     async def broadcast(self, message: dict):
-        dead: Set[WebSocket] = set()
-        for ws in list(self.active):
+        """Send to all clients concurrently with a short timeout each. Sequential awaits let one
+        slow/backgrounded browser stall every broadcast - and the camera engine's POSTs with it."""
+        clients = list(self.active)
+        if not clients:
+            return
+
+        async def _send(ws: WebSocket) -> bool:
             try:
-                await ws.send_json(message)
+                await asyncio.wait_for(ws.send_json(message), timeout=1.0)
+                return True
             except Exception:
-                dead.add(ws)
-        for ws in dead:
-            self.active.discard(ws)
+                return False
+
+        results = await asyncio.gather(*(_send(ws) for ws in clients))
+        for ws, ok in zip(clients, results):
+            if not ok:
+                self.active.discard(ws)
 
     @property
     def connection_count(self) -> int:

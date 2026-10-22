@@ -84,6 +84,11 @@ export function tierColor(tier: string): string {
   }
 }
 
+/** Tier from an eco-points balance (citizens and workers): Bronze <500, Silver 500+, Gold 2000+, Eco-Champion 5000+. */
+export function tierFor(points: number): "Bronze" | "Silver" | "Gold" | "Eco-Champion" {
+  return points >= 5000 ? "Eco-Champion" : points >= 2000 ? "Gold" : points >= 500 ? "Silver" : "Bronze";
+}
+
 export function tierPoints(tier: string): { min: number; max: number } {
   switch (tier?.toLowerCase()) {
     case "eco-champion": return { min: 5000, max: 10000 };

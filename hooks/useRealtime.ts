@@ -81,10 +81,6 @@ export function useRealtime() {
               ward: msg.ward || prev?.ward || "",
             });
           }
-
-          if (msg.type === "civic_index" && typeof msg.value === "number") {
-            store.setCivicIndex(msg.value);
-          }
         } catch (err) {
           console.error("[EcoWatch WS] Message handling error:", err);
         }

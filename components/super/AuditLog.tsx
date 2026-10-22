@@ -7,7 +7,7 @@ import { formatDateTime } from "@/lib/utils";
 
 interface Entry { id: string; actor_name: string | null; actor_role: string; action: string; target_type: string | null; target_id: string | null; details: Record<string, unknown> | null; created_at: string }
 
-const ACTION_TEXT: Record<string, string> = {
+export const ACTION_TEXT: Record<string, string> = {
   ADMIN_CREATED: "created admin", ADMIN_UPDATE: "updated admin", ADMIN_RESET_PASSWORD: "reset admin password",
   ADMIN_DEACTIVATE: "deactivated admin", ADMIN_ACTIVATE: "re-activated admin",
   SECTOR_CREATED: "created sector", SECTOR_UPDATE: "edited sector", SECTOR_REASSIGN: "reassigned sector",

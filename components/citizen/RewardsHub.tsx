@@ -5,7 +5,7 @@ import { useState, useEffect } from "react";
 import { Award, Star, ShoppingBag, Loader2, CheckCircle2, Zap, X } from "lucide-react";
 import { getRewards, supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
-import { cn, tierColor, tierPoints } from "@/lib/utils";
+import { cn, tierColor, tierPoints, tierFor } from "@/lib/utils";
 import { Portal } from "@/components/shared/Portal";
 
 interface Reward {
@@ -91,10 +91,11 @@ export function RewardsHub() {
     }
   }
 
-  const tier = user?.tier ?? "Bronze";
+  // Tier always follows the CURRENT balance (the stored login-time tier goes stale after earning/redeeming).
+  const tier = tierFor(ecoPoints);
   const tierMeta = TIER_META.find((t) => t.name === tier) ?? TIER_META[0];
   const { min, max } = tierPoints(tier);
-  const progress = Math.min(100, ((ecoPoints - min) / (max - min)) * 100);
+  const progress = Math.max(0, Math.min(100, ((ecoPoints - min) / Math.max(1, max - min)) * 100));
   const nextTier = TIER_META[TIER_META.findIndex((t) => t.name === tier) + 1];
 
   if (loading) return <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 text-eco-400 animate-spin" /></div>;

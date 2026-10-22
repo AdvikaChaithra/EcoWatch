@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { formatDate } from "@/lib/utils";
+import { normalizePhone, phoneVariants } from "@/lib/phone";
 
 interface Profile {
   id: string; name: string; phone: string; email: string | null; address: string | null; ward: string | null;
@@ -50,7 +51,7 @@ export function CitizenProfile() {
 
   async function save() {
     if (!p || !user) return;
-    const phone = form.phone.replace(/[\s-]/g, "");
+    const phone = normalizePhone(form.phone);
     const email = form.email.trim().toLowerCase();
     if (!PHONE_RE.test(phone)) { setError("Enter a valid phone number (8-15 digits, optional +country code)."); return; }
     if (!EMAIL_RE.test(email)) { setError("Enter a valid email address."); return; }
@@ -58,7 +59,7 @@ export function CitizenProfile() {
     try {
       // uniqueness: phone and email identify an account
       const { data: clash, error: ce } = await supabase.from("citizens").select("id")
-        .or(`phone.eq.${phone},email.eq.${email}`).neq("id", p.id).limit(1);
+        .or(`phone.in.(${phoneVariants(phone).map((v) => `"${v}"`).join(",")}),email.eq.${email}`).neq("id", p.id).limit(1);
       if (ce) throw ce;
       if (clash && clash.length) throw new Error("That phone number or email is already used by another account.");
 

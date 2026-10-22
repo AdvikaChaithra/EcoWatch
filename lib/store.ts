@@ -76,13 +76,11 @@ interface EcoWatchStore {
   totalViolationsToday: number;
   activeDumpReports: number;
   workersOnDuty: number;
-  civicIndex: number;
   liveAlerts: LiveAlert[];
 
   setTotalViolationsToday: (n: number) => void;
   setActiveDumpReports: (n: number) => void;
   setWorkersOnDuty: (n: number) => void;
-  setCivicIndex: (n: number) => void;
   addLiveAlert: (alert: LiveAlert) => void;
   clearAlerts: () => void;
 
@@ -125,13 +123,11 @@ export const useEcoStore = create<EcoWatchStore>((set, get) => ({
   totalViolationsToday: 0,
   activeDumpReports: 0,
   workersOnDuty: 0,
-  civicIndex: 72,
   liveAlerts: [],
 
   setTotalViolationsToday: (n) => set({ totalViolationsToday: n }),
   setActiveDumpReports:    (n) => set({ activeDumpReports: n }),
   setWorkersOnDuty:        (n) => set({ workersOnDuty: n }),
-  setCivicIndex:           (n) => set({ civicIndex: n }),
   addLiveAlert: (alert) =>
     set((state) => ({ liveAlerts: [alert, ...state.liveAlerts].slice(0, 50) })),
   clearAlerts: () => set({ liveAlerts: [] }),

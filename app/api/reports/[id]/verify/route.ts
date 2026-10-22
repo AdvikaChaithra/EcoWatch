@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverSupabase, fail, serverError, readJson, requireRole, audit } from "@/lib/server";
+import { tierFor } from "@/lib/utils";
 import { pointsFor, inRange, TASK_BONUS_RUPEES, TASK_BONUS_MIN, TASK_BONUS_MAX, TASK_POINTS_MIN, TASK_POINTS_MAX } from "@/lib/taskPoints";
 
 // Reads the caller's session token, so this route must never be pre-rendered at build time.
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         tasks_completed: (w.tasks_completed ?? 0) + 1,
         bonus_accrued: Number(w.bonus_accrued ?? 0) + (bonus ?? 0),
         eco_points: (w.eco_points ?? 0) + points,
+        tier: tierFor((w.eco_points ?? 0) + points),
       }).eq("id", w.id);
       if (ce) throw ce;
     }

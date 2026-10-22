@@ -2,7 +2,7 @@
 import { ErrorNote, errMsg } from "@/components/layout/ErrorNote";
 import { useState, useEffect } from "react";
 import { CheckCircle2, Clock, HardHat, Loader2, ChevronRight, ImageIcon } from "lucide-react";
-import { getDumpReports } from "@/lib/supabase";
+import { getDumpReports, supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { cn, formatDate, statusColor } from "@/lib/utils";
 
@@ -32,10 +32,21 @@ export function ReportTracker() {
     loadReports();
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function loadReports() {
-    setLoading(true);
+  // Live: dispatch, cleanup and verification of this citizen's reports show up without a reload.
+  useEffect(() => {
+    if (!user?.id) return;
+    const ch = supabase.channel(`my-reports:${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "dump_reports", filter: `citizen_id=eq.${user.id}` },
+          () => loadReports(false))
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadReports(spinner = true) {
+    if (!user?.id) { setReports([]); setLoading(false); return; }   // never list other people's reports
+    if (spinner) setLoading(true);
     try {
-      const data = await getDumpReports(user?.id);
+      const data = await getDumpReports(user.id);
       setReports(data ?? []);
       setLoadError("");
     } catch (e) { setReports([]); setLoadError(errMsg(e, "Could not load your reports.")); }

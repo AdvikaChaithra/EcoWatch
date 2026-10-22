@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   AlertTriangle, Eye, CreditCard, FileText, Loader2, X,
   CheckCircle2, Download, Printer
-} from "lucide-react";
+, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
@@ -299,7 +299,7 @@ export function ViolationHub() {
             <h2 className="text-xl font-display font-bold text-slate-100">Violation & Penalty Hub</h2>
             <p className="text-sm text-slate-400 mt-0.5">{violations.length} violation{violations.length !== 1 ? "s" : ""} on record</p>
           </div>
-          <button onClick={loadViolations} className="p-2 rounded-xl hover:bg-white/5 text-slate-400"><Loader2 className="w-4 h-4" /></button>
+          <button onClick={loadViolations} title="Refresh" className="p-2 rounded-xl hover:bg-white/5 text-slate-400"><RefreshCw className="w-4 h-4" /></button>
         </div>
 
         {violations.length === 0 ? (

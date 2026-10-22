@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { serverSupabase, fail, serverError, readJson, verifySecret, signSession } from "@/lib/server";
+import { serverSupabase, fail, serverError, readJson, verifySecret, signSession , hashSecret } from "@/lib/server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,9 +28,11 @@ export async function POST(req: NextRequest) {
       return fail("This worker account has been deactivated.", 403);
     }
 
+    // A PIN still stored in plain text (pre-hashing accounts) is upgraded to a pbkdf2 hash here.
+    const upgrade = worker.pin_hash && !String(worker.pin_hash).startsWith("pbkdf2$") ? { pin_hash: hashSecret(pin) } : {};
     const { error: updErr } = await supabase
       .from("workers")
-      .update({ status: "On Duty", updated_at: new Date().toISOString() })
+      .update({ status: "On Duty", updated_at: new Date().toISOString(), ...upgrade })
       .eq("id", worker.id);
     if (updErr) throw updErr;
 

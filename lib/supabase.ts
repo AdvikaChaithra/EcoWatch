@@ -13,44 +13,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 // ─── Citizen helpers ──────────────────────────────────────────────────────────
 
-// Safe columns only — excludes face_embedding (512-D vector) and gov_id (PII)
-const CITIZEN_SAFE_COLS = "id,name,phone,email,address,ward,eco_points,tier,created_at";
-
-export async function getCitizens() {
-  const { data, error } = await supabase
-    .from("citizens")
-    .select(CITIZEN_SAFE_COLS)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function getCitizenById(id: string) {
-  const { data, error } = await supabase
-    .from("citizens")
-    .select(CITIZEN_SAFE_COLS)
-    .eq("id", id)
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-export async function createCitizen(payload: {
-  name: string;
-  phone: string;
-  email: string;
-  address: string;
-  ward: string;
-  gov_id: string;
-}) {
-  const { data, error } = await supabase
-    .from("citizens")
-    .insert([{ ...payload, eco_points: 0, tier: "Bronze" }])
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+// Citizens are created by POST /api/auth/register-face (face + duplicate checks on the server).
 
 export async function updateCitizenEcoPoints(id: string, delta: number) {
   const { data: citizen, error: readErr } = await supabase
@@ -73,6 +36,7 @@ export async function updateCitizenEcoPoints(id: string, delta: number) {
 }
 
 // ─── Violations ───────────────────────────────────────────────────────────────
+// Violations are created ONLY by the backend identity pipeline (confident face match required).
 
 export async function getViolations(citizenId?: string) {
   let query = supabase
@@ -81,30 +45,6 @@ export async function getViolations(citizenId?: string) {
     .order("timestamp", { ascending: false });
   if (citizenId) query = query.eq("citizen_id", citizenId);
   const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
-
-export async function createViolation(payload: {
-  citizen_id?: string;
-  location_name: string;
-  lat: number;
-  lng: number;
-  snapshot_url?: string;
-  confidence_score: number;
-}) {
-  const { data, error } = await supabase
-    .from("violations")
-    .insert([
-      {
-        ...payload,
-        fine_amount: 500,
-        status: "Pending",
-        timestamp: new Date().toISOString(),
-      },
-    ])
-    .select()
-    .single();
   if (error) throw error;
   return data;
 }
@@ -196,20 +136,6 @@ export async function assignWorkerToReport(reportId: string, workerId: string) {
   if (!data || data.length === 0) throw new Error("This report was already dispatched or is no longer open.");
 }
 
-export async function completeReport(
-  reportId: string,
-  cleanedImageUrl: string
-) {
-  const { error } = await supabase
-    .from("dump_reports")
-    .update({
-      status: "Pending Verification",
-      cleaned_image_url: cleanedImageUrl,
-    })
-    .eq("id", reportId);
-  if (error) throw error;
-}
-
 // Admin approval of a worker's cleanup proof is server-side: POST /api/reports/[id]/verify.
 
 // ─── Workers ──────────────────────────────────────────────────────────────────
@@ -228,33 +154,6 @@ export async function getWorkers(wardFilter?: string) {
   return data;
 }
 
-export async function getWorkerById(id: string) {
-  const { data, error } = await supabase
-    .from("workers")
-    .select(WORKER_SAFE_COLS)
-    .eq("id", id)
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-export async function createWorker(payload: {
-  name: string;
-  phone: string;
-  ward: string;
-  employee_id: string;
-  admin_id: string;
-  pin_hash: string;
-}) {
-  const { data, error } = await supabase
-    .from("workers")
-    .insert([{ ...payload, status: "Off Duty", tasks_completed: 0, eco_points: 0, bonus_accrued: 0 }])
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
 export async function updateWorkerStatus(
   id: string,
   status: "On Duty" | "Off Duty"
@@ -268,24 +167,7 @@ export async function updateWorkerStatus(
 
 // ─── Admins ───────────────────────────────────────────────────────────────────
 
-// Safe columns only — excludes password_hash and totp_secret (credentials)
-const ADMIN_SAFE_COLS = "id,name,email,admin_id,ward_jurisdiction,designation,created_at";
-
-export async function getAdmins() {
-  const { data, error } = await supabase.from("admins").select(ADMIN_SAFE_COLS);
-  if (error) throw error;
-  return data;
-}
-
-export async function getAdminByEmail(email: string) {
-  const { data, error } = await supabase
-    .from("admins")
-    .select(ADMIN_SAFE_COLS)
-    .eq("email", email)
-    .single();
-  if (error) throw error;
-  return data;
-}
+// Admin and worker accounts are created by the server routes (app/api/super/*, app/api/workers).
 
 // ─── Rewards ──────────────────────────────────────────────────────────────────
 

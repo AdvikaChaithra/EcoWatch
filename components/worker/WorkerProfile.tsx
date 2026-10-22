@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, Star, Package, User, BadgeCheck, Phone, MapPin } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { cn } from "@/lib/utils";
+import { cn , tierFor } from "@/lib/utils";
 
 interface WorkerData {
   id: string; name: string; phone: string; ward: string; employee_id: string;
@@ -76,6 +76,7 @@ export function WorkerProfile({ workerId }: Props) {
       // optimistic lock: only succeeds if the balance hasn't changed (no double spend)
       const { data, error } = await supabase.from("workers").update({
         eco_points: prevPoints - reward.points_cost,
+        tier: tierFor(prevPoints - reward.points_cost),
       }).eq("id", workerId).eq("eco_points", prevPoints).select("id");
       if (error) throw error;
       if (!data || data.length === 0) throw new Error("Your points balance changed. Please refresh and try again.");
@@ -91,8 +92,8 @@ export function WorkerProfile({ workerId }: Props) {
   if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 text-yellow-400 animate-spin" /></div>;
   if (!worker) return <div className="glass-card p-8 text-center text-slate-500">{loadError || "Profile not found"}</div>;
 
-  const tier  = worker.tier ?? "Bronze";
   const pts   = worker.eco_points ?? 0;
+  const tier  = tierFor(pts);   // always follows the current balance
   const next  = TIER_NEXT_PTS[tier] ?? 5000;
   const pct   = Math.min(100, (pts / next) * 100);
   const supervisor = worker.admins;

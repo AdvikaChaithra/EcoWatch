@@ -1,21 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverSupabase, fail, serverError, readJson, extractEmbedding } from "@/lib/server";
+import { normalizePhone, phoneVariants } from "@/lib/phone";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await readJson<Record<string, any>>(req);
     if (!body) return fail("Invalid request body.", 400);
-    const { name, phone, address, ward, gov_id, imageBase64 } = body;
+    const { name, address, ward, gov_id, imageBase64 } = body;
+    const phone = typeof body.phone === "string" ? normalizePhone(body.phone) : "";
     const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
 
     if (!name || !phone) return fail("Name and phone are required.", 400);
+    if (!/^\+?\d{8,15}$/.test(phone)) return fail("Enter a valid phone number (8-15 digits, optional +country code).", 400);
     if (!email) return fail("Email is required to enable login.", 400);
     if (!imageBase64) return fail("Face enrollment is required to register.", 400);
 
     const supabase = serverSupabase();
 
     const { data: existingPhone, error: e1 } = await supabase
-      .from("citizens").select("id, name").eq("phone", phone).maybeSingle();
+      .from("citizens").select("id, name").in("phone", phoneVariants(phone)).limit(1).maybeSingle();
     if (e1) throw e1;
     if (existingPhone) return fail(`Phone already registered to ${existingPhone.name}.`, 409);
 

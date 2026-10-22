@@ -4,6 +4,7 @@ import { Shield, Mail, Badge, MapPin, Clock, Activity, Loader2, RefreshCw } from
 import { supabase } from "@/lib/supabase";
 import { useEcoStore } from "@/lib/store";
 import { cn, formatDateTime } from "@/lib/utils";
+import { ACTION_TEXT } from "@/components/super/AuditLog";
 
 // FIX 1: Removed last_login — column does not exist in schema.sql
 interface AdminProfile {
@@ -26,61 +27,34 @@ export function AdminProfile() {
   useEffect(() => { loadProfile(); }, [user]); // eslint-disable-line
 
   async function loadProfile() {
+    if (!user?.id) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [admRes, statsRes] = await Promise.all([
-        // FIX 1: Filter by currentUser.id, not .limit(1) (which returned the first admin regardless of who's logged in)
-        user?.id
-          ? supabase
-              .from("admins")
-              .select("id,name,email,admin_id,ward_jurisdiction,designation,created_at")
-              .eq("id", user.id)
-              .maybeSingle()
-          : supabase
-              .from("admins")
-              .select("id,name,email,admin_id,ward_jurisdiction,designation,created_at")
-              .limit(1)
-              .maybeSingle(),
-        Promise.all([
-          supabase.from("violations").select("*", { count: "exact", head: true }),
-          supabase.from("violations").select("*", { count: "exact", head: true }).in("status", ["Dismissed", "Upheld"]),
-          supabase.from("workers").select("*", { count: "exact", head: true }),
-        ]),
+      // Everything here is about THIS admin: their account, their workers, their recorded actions.
+      const [admRes, actions, resolved, workers, recent] = await Promise.all([
+        supabase.from("admins").select("id,name,email,admin_id,ward_jurisdiction,designation,created_at").eq("id", user.id).maybeSingle(),
+        supabase.from("audit_log").select("id", { count: "exact", head: true }).eq("actor_id", user.id),
+        supabase.from("violations").select("id", { count: "exact", head: true }).eq("reviewed_by", user.id).in("status", ["Dismissed", "Upheld"]),
+        supabase.from("workers").select("id", { count: "exact", head: true }).eq("admin_id", user.id).eq("active", true),
+        supabase.from("audit_log").select("action,target_type,details,created_at").eq("actor_id", user.id)
+          .order("created_at", { ascending: false }).limit(10),
       ]);
-
       if (admRes.data) setProfile(admRes.data);
-      const [vTotal, vResolved, wTotal] = statsRes;
-      // FIX 2: No fake +12 padding on totalActions
       setStats({
-        totalActions:      vTotal.count ?? 0,
-        disputesResolved:  vResolved.count ?? 0,
-        workersSupervised: wTotal.count ?? 0,
+        totalActions:      actions.count ?? 0,
+        disputesResolved:  resolved.count ?? 0,
+        workersSupervised: workers.count ?? 0,
       });
-
-      // Build audit log from real Supabase data
-      const [recentViolations, recentReports] = await Promise.all([
-        supabase.from("violations").select("id,location_name,timestamp,status").order("timestamp", { ascending: false }).limit(5),
-        supabase.from("dump_reports").select("id,category,location_name,created_at,status").order("created_at", { ascending: false }).limit(5),
-      ]);
-
-      const entries: AuditEntry[] = [
-        ...(recentViolations.data ?? []).map((v) => ({
-          action:    `Violation #${v.id.slice(0, 6).toUpperCase()} — Status: ${v.status}`,
-          entity:    v.location_name,
-          timestamp: v.timestamp,
-          type:      "violation" as const,
-        })),
-        ...(recentReports.data ?? []).map((r) => ({
-          action:    `${r.category} Report — ${r.status}`,
-          entity:    r.location_name,
-          timestamp: r.created_at,
-          type:      "report" as const,
-        })),
-      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10);
-
-      setAuditLog(entries);
+      setAuditLog((recent.data ?? []).map((e: { action: string; target_type: string | null; details: Record<string, unknown> | null; created_at: string }) => {
+        const d = e.details ?? {};
+        const what = [d.worker, d.category, d.email, d.employee_id, d.area, d.reason].filter(Boolean).join(" · ");
+        const type: AuditEntry["type"] = e.action.startsWith("REPORT_") ? "verify"
+          : e.action.startsWith("WORKER_") ? "dispatch"
+          : e.action.startsWith("EVENT_") ? "violation" : "report";
+        return { action: ACTION_TEXT[e.action] ?? e.action, entity: what || (e.target_type ?? ""), timestamp: e.created_at, type };
+      }));
     } catch (e: any) {
-      console.warn('[AdminProfile] DB query failed — apply schema.sql in Supabase SQL Editor:', e?.message);
+      console.warn("[AdminProfile] could not load profile:", e?.message);
     } finally { setLoading(false); }
   }
 
@@ -132,9 +106,9 @@ export function AdminProfile() {
       {/* KPI Stats — FIX 2: removed avgResponseH (no DB source) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: "Total Violations Actioned", value: stats.totalActions,      color: "text-blue-400",   bg: "bg-blue-500/10  border-blue-500/20"   },
-          { label: "Disputes Resolved",         value: stats.disputesResolved,  color: "text-eco-400",    bg: "bg-eco-500/10   border-eco-500/20"    },
-          { label: "Workers Supervised",        value: stats.workersSupervised, color: "text-yellow-400", bg: "bg-yellow-500/10 border-yellow-500/20" },
+          { label: "My Recorded Actions",       value: stats.totalActions,      color: "text-blue-400",   bg: "bg-blue-500/10  border-blue-500/20"   },
+          { label: "Disputes I Resolved",       value: stats.disputesResolved,  color: "text-eco-400",    bg: "bg-eco-500/10   border-eco-500/20"    },
+          { label: "Active Workers I Supervise", value: stats.workersSupervised, color: "text-yellow-400", bg: "bg-yellow-500/10 border-yellow-500/20" },
         ].map(({ label, value, color, bg }) => (
           <div key={label} className={cn("glass-card p-4 border rounded-2xl", bg)}>
             <p className="text-xs text-slate-400">{label}</p>
@@ -147,14 +121,14 @@ export function AdminProfile() {
       <div className="glass-card p-5">
         <div className="flex items-center gap-2 mb-4">
           <Activity className="w-4 h-4 text-blue-400" />
-          <h3 className="font-display font-semibold text-slate-100">System Audit Log</h3>
+          <h3 className="font-display font-semibold text-slate-100">My Recent Actions</h3>
           <span className="badge bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs ml-auto">{auditLog.length} recent actions</span>
         </div>
         <div className="space-y-2">
           {auditLog.length === 0 ? (
             <div className="text-center text-slate-500 py-6 space-y-1">
-              <p className="text-sm">No log entries yet</p>
-              <p className="text-xs">Apply <code className="text-eco-400 bg-eco-500/10 px-1 rounded">schema.sql</code> in your Supabase SQL Editor to seed data</p>
+              <p className="text-sm">No actions recorded yet</p>
+              <p className="text-xs">Approving cleanups, managing workers and reviewing camera events are recorded here.</p>
             </div>
           ) : auditLog.map((entry, i) => (
             <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-white/3 border border-white/5 hover:border-white/10 transition-colors">

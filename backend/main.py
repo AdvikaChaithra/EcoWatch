@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.database import get_supabase, get_ws_manager
 from backend.security import safe_equal, send_sms
 from backend.models import VisionStatus, NodeHealth, LitteringEventPayload
-from backend.routers import auth, violations, reports, workers
+from backend.routers import auth
 from backend import identity
 from backend import camera_location
 from backend.security import utcnow_iso
@@ -59,9 +59,9 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-app.include_router(violations.router)
-app.include_router(reports.router)
-app.include_router(workers.router)
+# Reports, workers and violations are handled by the website's server routes (app/api/*) and the
+# identity pipeline below. The old REST routers were removed: unused, and they bypassed sector
+# ownership, the audit log and the once-only approval rules.
 
 # A10: Engine API key for all vision/* endpoints
 _ENGINE_KEY = os.getenv("ENGINE_API_KEY", "")
@@ -343,23 +343,6 @@ async def set_camera_location(body: dict):
 
 
 # ─── Civic Index ─────────────────────────────────────────────────────────────
-
-@app.get("/api/civic-index")
-async def civic_index():
-    sb = get_supabase()
-    manager = get_ws_manager()
-    try:
-        active  = sb.table("dump_reports").select("*", count="exact", head=True).not_.eq("status", "Cleaned & Verified").execute().count or 0
-        pending = sb.table("violations").select("*", count="exact", head=True).eq("status", "Pending").execute().count or 0
-        cleaned = sb.table("dump_reports").select("*", count="exact", head=True).eq("status", "Cleaned & Verified").execute().count or 0
-    except Exception as e:
-        # Don't fabricate a score — an outage must not look like a healthy city.
-        print(f"[CivicIndex] DB error: {e}")
-        raise HTTPException(status_code=503, detail="Civic index unavailable: database error")
-    score = max(10, min(100, 100 - active * 3 - pending * 2 + cleaned))
-    await manager.broadcast({"type": "civic_index", "value": score})
-    return {"civic_index": score}
-
 
 # ─── SMS dispatch (A10: requires SMS_API_KEY header) ─────────────────────────
 
