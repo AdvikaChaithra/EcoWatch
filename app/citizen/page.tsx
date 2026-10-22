@@ -9,6 +9,7 @@ import { RewardsHub } from "@/components/citizen/RewardsHub";
 import { CitizenProfile } from "@/components/citizen/CitizenProfile";
 import { useEcoStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { KeepAliveTabs } from "@/components/shared/KeepAliveTabs";
 
 const TABS = [
   { id: "violations", label: "Violations", icon: AlertTriangle, color: "text-red-400"     },
@@ -75,12 +76,15 @@ export default function CitizenDashboard() {
 
       {/* Tab Content */}
       <div className="animate-fade-in-up">
-        {activeTab === "violations" && <ViolationHub />}
-        {activeTab === "report"     && <ReportTool />}
-        {activeTab === "tracker"    && <ReportTracker />}
-        {activeTab === "heatmap"    && <CivicHeatmap />}
-        {activeTab === "rewards"    && <RewardsHub />}
-        {activeTab === "profile"    && <CitizenProfile />}
+        {/* visited tabs stay loaded (instant switching); the camera and map tabs reload */}
+        <KeepAliveTabs active={activeTab} noKeep={["report", "heatmap"]} panels={{
+          violations: () => <ViolationHub />,
+          report:     () => <ReportTool />,
+          tracker:    () => <ReportTracker />,
+          heatmap:    () => <CivicHeatmap />,
+          rewards:    () => <RewardsHub />,
+          profile:    () => <CitizenProfile />,
+        }} />
       </div>
     </div>
   );

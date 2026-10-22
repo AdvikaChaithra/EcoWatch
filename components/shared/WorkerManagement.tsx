@@ -52,25 +52,19 @@ export function WorkerManagement({ scope }: { scope: "admin" | "super" }) {
     if (!user?.id) return;
     setLoading(true);
     try {
+      // All three in parallel (each round trip to the database is ~0.2-1 s from here).
+      // An admin's workers = workers.admin_id (it always follows the worker's sector).
       let sq = supabase.from("sectors").select("id,area,name,corporation,admin_id,lat,lng,active").order("area");
-      if (scope === "admin") sq = sq.eq("admin_id", user.id);
-      const { data: sData, error: sErr } = await sq;
-      if (sErr) throw sErr;
-      setSectors((sData ?? []) as Sector[]);
-
       let wq = supabase.from("workers").select(COLS).order("name");
-      if (scope === "admin") {
-        const ids = (sData ?? []).map((s: any) => s.id);
-        wq = ids.length ? wq.in("sector_id", ids) : wq.eq("admin_id", user.id);
-      }
-      const { data: wData, error: wErr } = await wq;
+      if (scope === "admin") { sq = sq.eq("admin_id", user.id); wq = wq.eq("admin_id", user.id); }
+      const [{ data: sData, error: sErr }, { data: wData, error: wErr }, adminsRes] = await Promise.all([
+        sq, wq, scope === "super" ? authFetch<{ admins: AdminLite[] }>("/api/super/admins") : Promise.resolve(null),
+      ]);
+      if (sErr) throw sErr;
       if (wErr) throw wErr;
+      setSectors((sData ?? []) as Sector[]);
       setWorkers((wData ?? []) as Worker[]);
-
-      if (scope === "super") {
-        const r = await authFetch<{ admins: AdminLite[] }>("/api/super/admins");
-        setAdmins(r.admins);
-      }
+      if (adminsRes) setAdmins(adminsRes.admins);
       setError("");
     } catch (e: any) {
       setError(`Could not load workers: ${e?.message ?? e}`);

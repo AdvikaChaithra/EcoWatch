@@ -7,6 +7,7 @@ import { SectorsManager } from "@/components/super/SectorsManager";
 import { AuditLog } from "@/components/super/AuditLog";
 import { WorkerManagement } from "@/components/shared/WorkerManagement";
 import { cn } from "@/lib/utils";
+import { KeepAliveTabs } from "@/components/shared/KeepAliveTabs";
 
 const TABS = [
   { id: "overview", label: "Overview",  icon: LayoutDashboard },
@@ -42,11 +43,14 @@ export default function SuperAdminPortal() {
       </div>
 
       <div className="animate-fade-in-up">
-        {tab === "overview" && <SuperOverview />}
-        {tab === "admins"   && <AdminsManager />}
-        {tab === "sectors"  && <SectorsManager />}
-        {tab === "workers"  && <WorkerManagement scope="super" />}
-        {tab === "audit"    && <AuditLog />}
+        {/* visited tabs stay loaded (instant switching) */}
+        <KeepAliveTabs active={tab} panels={{
+          overview: () => <SuperOverview />,
+          admins:   () => <AdminsManager />,
+          sectors:  () => <SectorsManager />,
+          workers:  () => <WorkerManagement scope="super" />,
+          audit:    () => <AuditLog />,
+        }} />
       </div>
     </div>
   );

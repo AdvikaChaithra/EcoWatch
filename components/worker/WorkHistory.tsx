@@ -7,7 +7,7 @@ import { cn, formatDateTime, severityColor } from "@/lib/utils";
 
 interface Done {
   id: string; category: string; severity: string; location_name: string; status: string;
-  updated_at: string | null; verified_at: string | null; worker_points: number | null;
+  updated_at: string | null; verified_at: string | null; worker_points: number | null; worker_bonus: number | string | null;
 }
 
 /** The worker's finished cleanups: location, type of waste and the eco-points each one earned. */
@@ -21,7 +21,7 @@ export function WorkHistory({ workerId }: { workerId: string }) {
       setLoading(true);
       try {
         const { data, error: e } = await supabase.from("dump_reports")
-          .select("id,category,severity,location_name,status,updated_at,verified_at,worker_points")
+          .select("id,category,severity,location_name,status,updated_at,verified_at,worker_points,worker_bonus")
           .eq("assigned_worker_id", workerId)
           .in("status", ["Pending Verification", "Cleaned & Verified"])
           .order("updated_at", { ascending: false });
@@ -37,11 +37,12 @@ export function WorkHistory({ workerId }: { workerId: string }) {
 
   const verified = rows.filter((r) => r.status === "Cleaned & Verified");
   const earned = verified.reduce((a, r) => a + (r.worker_points ?? 0), 0);
+  const bonusTotal = verified.reduce((a, r) => a + Number(r.worker_bonus ?? 0), 0);
 
   return (
     <div className="space-y-4">
       <ErrorNote message={error} onDismiss={() => setError("")} />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="glass-card-sm p-3 text-center">
           <p className="text-xs text-slate-400">Verified cleanups</p>
           <p className="font-display text-xl font-bold text-eco-400">{verified.length}</p>
@@ -53,6 +54,10 @@ export function WorkHistory({ workerId }: { workerId: string }) {
         <div className="glass-card-sm p-3 text-center">
           <p className="text-xs text-slate-400">Eco-points earned</p>
           <p className="font-display text-xl font-bold text-yellow-400">{earned}</p>
+        </div>
+        <div className="glass-card-sm p-3 text-center">
+          <p className="text-xs text-slate-400">Bonus earned</p>
+          <p className="font-display text-xl font-bold text-green-400">₹{bonusTotal.toLocaleString("en-IN")}</p>
         </div>
       </div>
 
@@ -82,7 +87,10 @@ export function WorkHistory({ workerId }: { workerId: string }) {
                 <div className="text-right shrink-0">
                   {ok ? (
                     r.worker_points != null ? (
-                      <p className="font-display text-lg font-bold text-yellow-400">+{r.worker_points} <span className="text-xs font-normal text-slate-400">pts</span></p>
+                      <>
+                        <p className="font-display text-lg font-bold text-yellow-400">+{r.worker_points} <span className="text-xs font-normal text-slate-400">pts</span></p>
+                        {r.worker_bonus != null && <p className="text-sm font-semibold text-green-400">+₹{Number(r.worker_bonus).toLocaleString("en-IN")}</p>}
+                      </>
                     ) : (
                       <p className="text-[11px] text-slate-500 max-w-[7rem]">Verified before points were recorded</p>
                     )

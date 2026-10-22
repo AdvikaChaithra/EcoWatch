@@ -130,7 +130,7 @@ export function WorkerProfile({ workerId }: Props) {
       <div className="grid grid-cols-3 gap-4">
         {[
           { label: "Tasks Done",    value: worker.tasks_completed,           color: "text-eco-400" },
-          { label: "Bonus Accrued", value: `₹${(worker.bonus_accrued ?? 0).toLocaleString()}`, color: "text-green-400" },
+          { label: "Bonus Accrued", value: `₹${Number(worker.bonus_accrued ?? 0).toLocaleString("en-IN")}`, color: "text-green-400" },
           { label: "Eco-Points",    value: pts,                              color: "text-yellow-400" },
         ].map(({ label, value, color }) => (
           <div key={label} className="glass-card-sm p-3 text-center">

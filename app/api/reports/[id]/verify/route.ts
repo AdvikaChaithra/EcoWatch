@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const now = new Date().toISOString();
     const points = chosenPoints ?? pointsFor(r.severity as string);
     const update = b.approved
-      ? { status: "Cleaned & Verified", verified_at: now, verified_by: s.sub, worker_points: w ? points : null, updated_at: now }
+      ? { status: "Cleaned & Verified", verified_at: now, verified_by: s.sub, worker_points: w ? points : null, worker_bonus: w ? bonus : null, updated_at: now }
       : { status: "Submitted", assigned_worker_id: null, cleaned_image_url: null, updated_at: now };
     // guarded on the status so two admins (or a double click) can't both act
     const { data: done, error: ue } = await sb.from("dump_reports").update(update)

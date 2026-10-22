@@ -9,6 +9,7 @@ import { WorkerManagement } from "@/components/shared/WorkerManagement";
 import { AdminProfile } from "@/components/admin/AdminProfile";
 import { SectorFilter } from "@/components/admin/SectorFilter";
 import { cn } from "@/lib/utils";
+import { KeepAliveTabs } from "@/components/shared/KeepAliveTabs";
 
 const TABS = [
   { id: "kpi",       label: "Operations",  icon: LayoutDashboard, color: "text-blue-400"   },
@@ -58,12 +59,15 @@ export default function AdminDashboard() {
       </div>
 
       <div className="animate-fade-in-up">
-        {activeTab === "kpi"       && <KPIOverview />}
-        {activeTab === "dispatch"  && <TaskDispatch />}
-        {activeTab === "sla"       && <SLAMonitor />}
-        {activeTab === "tribunal"  && <DisputeTribunal />}
-        {activeTab === "workforce" && <WorkerManagement scope="admin" />}
-        {activeTab === "profile"   && <AdminProfile />}
+        {/* visited tabs stay loaded (instant switching); the map tab reloads */}
+        <KeepAliveTabs active={activeTab} noKeep={["kpi"]} panels={{
+          kpi:       () => <KPIOverview />,
+          dispatch:  () => <TaskDispatch />,
+          sla:       () => <SLAMonitor />,
+          tribunal:  () => <DisputeTribunal />,
+          workforce: () => <WorkerManagement scope="admin" />,
+          profile:   () => <AdminProfile />,
+        }} />
       </div>
     </div>
   );

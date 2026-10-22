@@ -28,8 +28,22 @@ export default function WorkerDashboard() {
     }
   }, [user]); // eslint-disable-line
 
-  async function loadAll() {
-    setLoading(true);
+  // Live: the admin's approval (bonus / points / tasks done) and new task assignments appear
+  // without reloading the page.
+  useEffect(() => {
+    if (!user?.id) return;
+    const ch = supabase.channel(`worker:${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "dump_reports", filter: `assigned_worker_id=eq.${user.id}` },
+          () => loadAll(false))
+      .subscribe();
+    // An approval updates the task row (dump_reports), which triggers the reload above. The worker
+    // row itself is not broadcast (it holds the PIN hash), so also refresh every 30 s.
+    const t = setInterval(() => loadAll(false), 30_000);
+    return () => { supabase.removeChannel(ch); clearInterval(t); };
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadAll(spinner = true) {
+    if (spinner) setLoading(true);
     try {
       const [wRes, rRes] = await Promise.all([
         user?.id
@@ -93,7 +107,7 @@ export default function WorkerDashboard() {
             </div>
             <div className="glass-card-sm px-3 py-2 text-center">
               <p className="text-xs text-slate-400">Bonus</p>
-              <p className="font-display font-bold text-green-400">₹{worker?.bonus_accrued?.toLocaleString() ?? 0}</p>
+              <p className="font-display font-bold text-green-400">₹{Number(worker?.bonus_accrued ?? 0).toLocaleString("en-IN")}</p>
             </div>
             <div className="glass-card-sm px-3 py-2 text-center">
               <p className="text-xs text-slate-400">Eco-Pts</p>
