@@ -13,6 +13,7 @@ import { Portal } from "@/components/shared/Portal";
 interface Report {
   id: string; category: string; severity: string; location_name: string; status: string; created_at: string; updated_at?: string;
   reported_image_url?: string; cleaned_image_url?: string; assigned_worker_id?: string; sector_id?: string | null;
+  proof_location_source?: "gps" | "manual_site" | null;
   workers?: { name: string; admin_id: string | null } | null;
 }
 
@@ -66,6 +67,17 @@ function BeforeAfterSlider({ beforeUrl, afterUrl }: { beforeUrl?: string; afterU
       />
     </div>
   );
+}
+
+/** How the worker's proof was located (GPS geofence-checked vs chosen manually). */
+function LocationBadge({ source }: { source?: "gps" | "manual_site" | null }) {
+  if (source === "manual_site") {
+    return <span className="badge text-[10px] mt-1 bg-orange-500/10 text-orange-300 border-orange-500/20">📍 Location chosen manually · GPS not verified</span>;
+  }
+  if (source === "gps") {
+    return <span className="badge text-[10px] mt-1 bg-eco-500/10 text-eco-300 border-eco-500/20">📍 GPS verified (within 50 m)</span>;
+  }
+  return null;
 }
 
 function SlaTimer({ createdAt }: { createdAt: string }) {
@@ -174,6 +186,7 @@ export function SLAMonitor() {
                   <p className="text-[11px] text-slate-500 mt-0.5">
                     {r.workers?.name ?? "Worker"} · submitted {formatDateTime(r.updated_at ?? r.created_at)}
                   </p>
+                  <LocationBadge source={r.proof_location_source} />
                   <button onClick={() => setSelected(r)} className="btn-eco text-xs px-3 py-1 mt-2">
                     <Eye className="w-3.5 h-3.5" /> Review &amp; approve
                   </button>
@@ -237,6 +250,11 @@ export function SLAMonitor() {
               </div>
             ) : (
               <>
+                {selected.proof_location_source === "manual_site" && (
+                  <p className="text-xs text-orange-300 bg-orange-500/10 border border-orange-500/20 rounded-lg p-2 mb-2">
+                    The worker chose the dump-site location manually, so their GPS position was not checked against the 50 m geofence. Judge the cleanup from the photos.
+                  </p>
+                )}
                 <p className="text-xs text-slate-400 mb-3">
                   <strong className="text-slate-200">{selected.category}</strong> ({selected.severity}) at {selected.location_name} ·
                   cleaned by <strong className="text-slate-200">{selected.workers?.name ?? "worker"}</strong>

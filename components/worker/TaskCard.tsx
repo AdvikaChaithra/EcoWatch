@@ -56,6 +56,9 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
   const [success, setSuccess]       = useState(false);
   const [uploaded, setUploaded]     = useState<string | null>(null);
   const [fix, setFix]               = useState<Fix | null>(null);
+  // Where the proof is located: the device's GPS (geofence-checked) or, when GPS can't be used
+  // (e.g. a demo away from the site), the dump site chosen manually - always labelled as such.
+  const [locMode, setLocMode]       = useState<"gps" | "manual_site">("gps");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const cam = useCamera();
@@ -68,7 +71,8 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
 
   const hasSite = Number.isFinite(task.lat) && Number.isFinite(task.lng);
   const dist = fix?.lat != null && fix?.lng != null && hasSite ? haversineMeters(fix.lat, fix.lng, task.lat, task.lng) : null;
-  const withinFence = !hasSite || (dist != null && dist <= GEOFENCE_RADIUS_METERS);
+  const manual = locMode === "manual_site";
+  const withinFence = !hasSite || manual || (dist != null && dist <= GEOFENCE_RADIUS_METERS);
 
   function openPanel() {
     setExpanded(true); setError("");
@@ -81,8 +85,10 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
     setExpanded(false);
   }
 
-  /** Best-accuracy GPS fix at the moment the proof is taken (watched for up to 15 s). */
+  /** Best-accuracy GPS fix at the moment the proof is taken (watched for up to 15 s),
+   *  or the dump site itself when the worker chose the location manually. */
   async function locate(): Promise<Fix> {
+    if (manual) return { lat: task.lat, lng: task.lng, accuracy: null, address: task.location_name };
     setLocating(true);
     try {
       const g = await geo.fetchLocation();
@@ -96,7 +102,7 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
     if (!cam.active) { await cam.startCamera("environment"); return; }
     const g = await locate();
     cam.captureFrame(g.lat != null && g.lng != null
-      ? { lat: g.lat, lng: g.lng, address: g.address ?? task.location_name }
+      ? { lat: g.lat, lng: g.lng, address: stampAddress(g) }
       : undefined);
     cam.stopCamera(); // photo taken: release the webcam
     setFix(g);
@@ -109,12 +115,25 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
     try {
       const g = await locate();
       setUploaded(await fileToJpegDataUrl(file, g.lat != null && g.lng != null
-        ? { lat: g.lat, lng: g.lng, address: g.address ?? task.location_name }
+        ? { lat: g.lat, lng: g.lng, address: stampAddress(g) }
         : undefined));
       setFix(g);
     } catch (e: any) {
       setError(e?.message ?? "Could not load the photo");
     }
+  }
+
+  /** Watermark text: a manually chosen location is labelled on the photo itself. */
+  function stampAddress(g: Fix) {
+    return manual ? `${task.location_name} [location chosen manually - GPS not verified]` : (g.address ?? task.location_name);
+  }
+
+  function switchLocMode(mode: "gps" | "manual_site") {
+    if (mode === locMode) return;
+    setLocMode(mode);
+    // a photo stamped with the other location must be retaken
+    if (photo) { cam.clearCapture(); setUploaded(null); setFix(null); cam.startCamera("environment"); }
+    setError("");
   }
 
   function retake() {
@@ -141,6 +160,7 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
       let q = supabase.from("dump_reports").update({
         status:            "Pending Verification",
         cleaned_image_url: imageUrl,
+        proof_location_source: manual ? "manual_site" : "gps",
         updated_at:        new Date().toISOString(),
       }).eq("id", task.id).in("status", ["Worker Assigned", "Cleaning in Progress"]);
       if (workerId) q = q.eq("assigned_worker_id", workerId);
@@ -170,6 +190,7 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
 
   const fenceMessage = (() => {
     if (!photo || !hasSite) return null;
+    if (manual) return { ok: true, text: "Location set manually to the dump site. GPS was not checked - the admin will see this on the proof." };
     if (fix?.lat == null) return { ok: false, text: "No GPS fix for this photo. Turn on location access, then retake." };
     const acc = Math.round(fix.accuracy ?? 0);
     if (withinFence) return { ok: true, text: `Location verified: ${Math.round(dist!)} m from the site (GPS ±${acc} m).` };
@@ -243,6 +264,19 @@ export function TaskCard({ task, workerId, onComplete }: Props) {
               </span>
             </div>
           )}
+
+          {/* Proof location: device GPS (default) or the dump site chosen manually */}
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {([["gps", "📍 My current GPS location", "Checked: must be within 50 m of the site"],
+               ["manual_site", "🗺️ Dump site location (manual)", "No GPS check · marked as manual for the admin"]] as const).map(([mode, label, hint]) => (
+              <button key={mode} onClick={() => switchLocMode(mode)} disabled={locating || submitting}
+                      className={cn("rounded-xl border p-2 text-left transition-colors",
+                        locMode === mode ? "border-eco-500/50 bg-eco-500/10 text-eco-200" : "border-white/10 text-slate-400 hover:bg-white/5")}>
+                <span className="block font-semibold">{label}</span>
+                <span className="block text-[10px] opacity-80">{hint}</span>
+              </button>
+            ))}
+          </div>
 
           <div className="camera-container aspect-video">
             {photo ? (
