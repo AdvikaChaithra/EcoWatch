@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 export default function WorkerAuthPage() {
   const router = useRouter();
   const { setCurrentUser, isAuthenticated, currentUser } = useEcoStore();
-  const [employeeId, setEmployeeId] = useState("EW-WRK-001");
+  const [employeeId, setEmployeeId] = useState("");
   const [pin,        setPin]        = useState("");
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState("");

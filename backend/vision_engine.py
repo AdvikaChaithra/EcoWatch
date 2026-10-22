@@ -133,7 +133,11 @@ BACKEND_URL    = os.getenv("BACKEND_URL", "http://localhost:8000")
 ENGINE_API_KEY = os.getenv("ENGINE_API_KEY", "")
 MJPEG_HOST     = os.getenv("MJPEG_HOST", "0.0.0.0")
 MJPEG_PORT     = int(os.getenv("MJPEG_PORT", "8001"))
-FRAME_Q_SIZE   = 3
+# The AI always works on the NEWEST frame (a deeper queue made the view seconds behind real time).
+FRAME_Q_SIZE   = 1
+# The live view is redrawn at camera speed from the latest frame + the latest AI overlay, so it
+# stays smooth even when inference is slow (inference speed only affects how often boxes move).
+DISPLAY_FPS    = float(os.getenv("DISPLAY_FPS", "20"))
 FACE_CROPS_MAX = int(os.getenv("FACE_CROPS_MAX", "6"))
 PIPELINE_INTERVAL_S = 0.2  # 5 Hz
 
@@ -249,21 +253,28 @@ class FrameRingBuffer:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MJPEGServer:
-    def __init__(self, host: str, port: int, control=None):
+    def __init__(self, host: str, port: int, control=None, telemetry=None):
         self._host  = host
         self._port  = port
         self._control = control   # CameraSource: pause()/resume()/status for webcam sharing
+        self._tel   = telemetry
         self._frame: Optional[bytes] = None
+        self._seq   = 0
         self._lock  = threading.Lock()
 
     def push_frame(self, frame: np.ndarray):
         _, enc = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         with self._lock:
             self._frame = enc.tobytes()
+            self._seq += 1
 
     def get_frame(self) -> Optional[bytes]:
         with self._lock:
             return self._frame
+
+    def get_frame_seq(self) -> Tuple[Optional[bytes], int]:
+        with self._lock:
+            return self._frame, self._seq
 
     def start(self):
         threading.Thread(target=self._serve, daemon=True, name="mjpeg").start()
@@ -309,22 +320,27 @@ class MJPEGServer:
                     self._control.pause(secs)
                 elif u.path == "/camera/resume":
                     self._control.resume()
-                self._json(conn, 200, {"status": self._control.status,
-                                       "paused": self._control.is_paused()})
+                body = {"status": self._control.status, "paused": self._control.is_paused()}
+                if self._tel is not None:
+                    snap = self._tel.get_snapshot()
+                    body.update({k: snap.get(k) for k in ("camera_fps", "inference_fps", "inference_latency_ms")})
+                self._json(conn, 200, body)
                 return
             conn.sendall(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
                 b"Cache-Control: no-cache\r\nConnection: close\r\n\r\n"
             )
+            sent = -1
             while True:
-                frame = self.get_frame()
-                if frame:
+                frame, seq = self.get_frame_seq()
+                if frame and seq != sent:   # only new pictures (no re-sending the same frame)
                     conn.sendall(
                         b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
                         str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
                     )
-                time.sleep(0.033)
+                    sent = seq
+                time.sleep(0.01)
         except Exception:
             pass
         finally:
@@ -351,6 +367,13 @@ class CameraSource:
         self._paused_until = 0.0
         self._is_file = False
         self._file_frame_dt = 0.0
+        self._latest: Optional[np.ndarray] = None
+        self._latest_lock = threading.Lock()
+
+    def latest(self) -> Optional[np.ndarray]:
+        """Most recent camera frame (for the live view), or None while paused/offline."""
+        with self._latest_lock:
+            return self._latest
 
     def _backends(self) -> List[Tuple[str, Optional[int]]]:
         if not isinstance(CAMERA_SOURCE, int):
@@ -485,9 +508,20 @@ class CameraSource:
                 if self.status == "CAMERA_BLACK":
                     self.status = "CAMERA_READY"
             self.tel.record_camera_frame()
+            with self._latest_lock:
+                self._latest = frame
+            # keep only the newest frame for the AI: replace a stale one instead of queueing behind it
             try:
                 self.q.put_nowait(frame)
             except queue.Full:
+                try:
+                    self.q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.q.put_nowait(frame)
+                except queue.Full:
+                    pass
                 self.tel.dropped_frames += 1
 
 
@@ -665,7 +699,7 @@ class VisionEngine:
         self.camera   = CameraSource(self.frame_q, self.telemetry)
 
         self.ring     = FrameRingBuffer(EVIDENCE_PRE_SECONDS, jpeg_quality=85)
-        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT, control=self.camera)
+        self.mjpeg    = MJPEGServer(MJPEG_HOST, MJPEG_PORT, control=self.camera, telemetry=self.telemetry)
         self.writer   = EvidenceWriter()
         self.zones    = ZoneChecker.load("backend/camera_zones.json", CAMERA_ID)
         self.stitcher = WasteTrackStitcher()
@@ -698,6 +732,11 @@ class VisionEngine:
 
         # Pipeline state (A9)
         self._pipeline_state: Dict[str, Any] = {}
+
+        # Latest AI overlay for the live view (see _display_loop)
+        self._overlay: Optional[np.ndarray] = None
+        self._overlay_ts = 0.0
+        self._overlay_lock = threading.Lock()
         self._pipeline_lock   = threading.Lock()
 
     # ── Status ────────────────────────────────────────────────────────────────
@@ -856,7 +895,7 @@ class VisionEngine:
             return frame
 
         t0      = time.perf_counter()
-        display = frame.copy()
+        display = np.zeros_like(frame)   # AI overlay only; composited onto live frames by _display_loop
         fh, fw  = frame.shape[:2]
 
         # ── Person detection + tracking (always ByteTrack) ────────────────────
@@ -1207,6 +1246,34 @@ class VisionEngine:
         if not self._safe_post("/api/littering_event", payload, 10.0, "littering_event", retries=4):
             print(f"[Engine] Event {payload.get('event_id')} NOT delivered; evidence kept at {payload.get('evidence_dir')}")
 
+    # ── Live view ─────────────────────────────────────────────────────────────
+
+    def _compose(self, frame: np.ndarray) -> np.ndarray:
+        """Latest AI overlay (boxes, labels, HUD) drawn over a live camera frame."""
+        with self._overlay_lock:
+            ov, ts = self._overlay, self._overlay_ts
+        if ov is None or ov.shape != frame.shape or time.time() - ts > 3.0:
+            return frame
+        out = frame.copy()
+        mask = ov.any(axis=2)
+        out[mask] = ov[mask]
+        return out
+
+    def _display_loop(self):
+        """Push live frames to the MJPEG stream at DISPLAY_FPS, independent of inference speed."""
+        period = 1.0 / max(1.0, DISPLAY_FPS)
+        last = None
+        while self._running:
+            t0 = time.time()
+            frame = self.camera.latest()
+            if frame is not None and frame is not last:
+                last = frame
+                try:
+                    self.mjpeg.push_frame(self._compose(frame))
+                except Exception as e:
+                    print(f"[Display] {e}")
+            time.sleep(max(0.0, period - (time.time() - t0)))
+
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def run(self):
@@ -1240,6 +1307,7 @@ class VisionEngine:
 
         threading.Thread(target=self._telemetry_loop, daemon=True).start()
         threading.Thread(target=self._pipeline_loop,  daemon=True).start()
+        threading.Thread(target=self._display_loop,   daemon=True, name="display").start()
 
         self._post_status("SYSTEM_READY",
             f"MJPEG=http://localhost:{MJPEG_PORT}/stream.mjpg | "
@@ -1253,10 +1321,11 @@ class VisionEngine:
                 except queue.Empty:
                     continue
                 self.ring.push(frame, now)
-                display = self._process_frame(frame, now)
-                self.mjpeg.push_frame(display)
+                overlay = self._process_frame(frame, now)
+                with self._overlay_lock:
+                    self._overlay, self._overlay_ts = overlay, now
                 if SHOW_WINDOW:
-                    cv2.imshow(f"EcoWatch v5 — {CAMERA_ID}", display)
+                    cv2.imshow(f"EcoWatch v5 — {CAMERA_ID}", self._compose(frame))
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
         except KeyboardInterrupt:

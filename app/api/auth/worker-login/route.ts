@@ -5,7 +5,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await readJson<{ employee_id?: string; pin?: string }>(req);
     if (!body) return fail("Invalid request body.", 400);
-    const employee_id = typeof body.employee_id === "string" ? body.employee_id.trim() : "";
+    // Employee IDs are stored in capitals (unique case-insensitively), so "ew-wrk-005" also signs in.
+    const employee_id = typeof body.employee_id === "string" ? body.employee_id.trim().toUpperCase() : "";
     const pin = typeof body.pin === "string" ? body.pin : "";
 
     if (!employee_id || !pin) return fail("Employee ID and PIN are required.", 400);
