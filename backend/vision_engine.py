@@ -982,7 +982,10 @@ class VisionEngine:
         # ── Waste detection: second model path ────────────────────────────────
         if DUAL_MODEL and self.waste_model is not None:
             self._frame_idx += 1
-            if self._frame_idx % WASTE_EVERY_N == 0 or not self._last_waste:
+            # Every frame while someone is in view or a case is open (the object is in their hand
+            # right now); every Nth frame otherwise to save CPU.
+            busy = bool(persons) or any(not sm.is_terminal for sm in self._sm_pool.values())
+            if busy or self._frame_idx % WASTE_EVERY_N == 0 or not self._last_waste:
                 w_results = self.waste_model.predict(
                     source=frame, verbose=False, imgsz=WASTE_IMGSZ, conf=WASTE_MODEL_CONF,
                     classes=self.waste_classes,
@@ -1213,8 +1216,9 @@ class VisionEngine:
         frames = self.ring.snapshot()
         if not hist or not frames:
             return []
-        step = max(1, len(frames) // (max_crops * 2))
-        crops: List[Tuple[float, str]] = []
+        # frames spread evenly over the pre-event window (the face is visible at different moments)
+        step = max(1, len(frames) // max(1, max_crops))
+        crops: List[str] = []
         for ts, jpg in frames[::step]:
             # nearest tracked bbox in time for this person
             t_b, bbox = min(hist, key=lambda it: abs(it[0] - ts))
@@ -1226,18 +1230,19 @@ class VisionEngine:
             fh, fw = arr.shape[:2]
             x1, y1, x2, y2 = bbox
             bw, bh = x2 - x1, y2 - y1
-            # head region: top ~45% of the person box, widened a little
-            cx1 = max(0, int(x1 - 0.15 * bw)); cx2 = min(fw, int(x2 + 0.15 * bw))
-            cy1 = max(0, int(y1 - 0.05 * bh)); cy2 = min(fh, int(y1 + 0.45 * bh))
+            # The WHOLE person box (+10%): the backend's face detector finds the face inside it.
+            # A "top 45%" head guess failed with a close camera - a raised hand filled that region.
+            cx1 = max(0, int(x1 - 0.10 * bw)); cx2 = min(fw, int(x2 + 0.10 * bw))
+            cy1 = max(0, int(y1 - 0.10 * bh)); cy2 = min(fh, int(y2 + 0.05 * bh))
             if cx2 - cx1 < 40 or cy2 - cy1 < 40:
                 continue
             crop = arr[cy1:cy2, cx1:cx2]
             ok, enc = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if ok:
-                # prefer larger crops (closer / better resolution)
-                crops.append((crop.shape[0] * crop.shape[1], base64.b64encode(enc.tobytes()).decode()))
-        crops.sort(key=lambda c: c[0], reverse=True)
-        return [c[1] for c in crops[:max_crops]]
+                crops.append(base64.b64encode(enc.tobytes()).decode())
+            if len(crops) >= max_crops:
+                break
+        return crops
 
     def _handle_event(self, ev: Optional[LitteringEvent], key: Tuple[int,int], now: float):
         if ev is None:

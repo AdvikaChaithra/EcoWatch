@@ -104,7 +104,9 @@ class LitteringConfig:
     grace_seconds:            float = 0.7   # A1 (person tracks)
     # Objects (esp. a small bottle lying still) flicker in/out of detection far more than
     # people, so they get a longer tolerance before being treated as removed.
-    waste_grace_seconds:      float = 2.5
+    # The litter model runs ~1-2x per second on a laptop CPU and a held object is often hidden
+    # by the hand, so allow ~4 detection cycles before treating it as removed.
+    waste_grace_seconds:      float = 4.0
 
     # Carry classification (A4)
     carry_comotion_threshold: float = 0.4
