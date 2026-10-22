@@ -67,6 +67,10 @@ yarn-error.log*
 *.swo
 
 # ── Claude Code working folders (local only) ──────────────────────────────────
+.pytest_cache/
+.agents/
+.next/
+skills-lock.json
 .claude/worktrees/
 .claude/work/
 .claude
