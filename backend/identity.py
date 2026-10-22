@@ -269,23 +269,67 @@ def record_event(sb, event: Dict[str, Any], result: IdentityResult) -> Dict[str,
         raise
     violation = ins.data[0] if ins.data else row
 
-    notification = None
-    if matched:
-        try:
-            vid = violation.get("id", "")
-            msg = (f"A littering incident was detected involving your registered account at "
-                   f"{loc.get('name') or 'a monitored location'}. Fine: ₹{FINE_AMOUNT:.0f}. "
-                   f"Violation ID: VIO-{str(vid)[:6].upper()}. You can pay or dispute from your dashboard."
-                   + (f"\n\n{row['awareness_message']}" if row.get("awareness_message") else ""))
-            note = {
-                "user_id": result.citizen_id, "type": "VIOLATION",
-                "title": "EcoWatch Violation", "message": msg,
-                "violation_id": vid, "sms_status": "NOT_CONFIGURED",
-            }
-            notification = (sb.table("notifications").insert(note).execute().data or [note])[0]
-        except Exception as e:
-            print(f"[Identity] notification insert failed: {e}")
+    notification = _notify_violation(sb, violation, result.citizen_id, loc.get("name"),
+                                     row.get("awareness_message")) if matched else None
     return {"violation": violation, "created": True, "notification": notification}
+
+
+def _notify_violation(sb, violation: Dict[str, Any], citizen_id: str, place: Optional[str],
+                      awareness: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The citizen's own alert for a fine (shown in their portal)."""
+    try:
+        vid = violation.get("id", "")
+        msg = (f"A littering incident was detected involving your registered account at "
+               f"{place or 'a monitored location'}. Fine: ₹{FINE_AMOUNT:.0f}. "
+               f"Violation ID: VIO-{str(vid)[:6].upper()}. You can pay or dispute from your dashboard."
+               + (f"\n\n{awareness}" if awareness else ""))
+        note = {
+            "user_id": citizen_id, "type": "VIOLATION",
+            "title": "EcoWatch Violation", "message": msg,
+            "violation_id": vid, "sms_status": "NOT_CONFIGURED",
+        }
+        return (sb.table("notifications").insert(note).execute().data or [note])[0]
+    except Exception as e:
+        print(f"[Identity] notification insert failed: {e}")
+        return None
+
+
+def reidentify(sb, violation_id: str, face_crops: List[str]) -> Dict[str, Any]:
+    """
+    Admin-requested retry of face identification for an UNIDENTIFIED event (e.g. the citizen
+    enrolled later, or the earlier attempt failed). Same rules as live events: only a confident
+    MATCH issues a fine; anything else just updates the recorded identity status.
+    Blocking (CPU-bound) - call from a worker thread.
+    """
+    rows = sb.table("violations").select("*").eq("id", violation_id).execute().data
+    if not rows:
+        return {"ok": False, "error": "Violation not found."}
+    v = rows[0]
+    if v.get("status") != "Unidentified":
+        return {"ok": False, "error": "Only unidentified events can be re-checked."}
+    result = identify(sb, face_crops)
+    if result.status == "ERROR":
+        return {"ok": False, "error": result.reason}
+    out = {"ok": True, "identity_status": result.status, "reason": result.reason,
+           "similarity": result.similarity, "faces_used": result.faces_used, "notes": result.notes[:6]}
+    if result.status == "MATCH" and result.citizen_id:
+        awareness = pick_awareness_message(sb, result.citizen_id)
+        upd = sb.table("violations").update({
+            "citizen_id": result.citizen_id, "fine_amount": FINE_AMOUNT, "status": "Pending",
+            "identity_status": "MATCHED", "face_similarity": round(result.similarity, 4),
+            "awareness_message": awareness,
+        }).eq("id", violation_id).eq("status", "Unidentified").execute().data
+        if not upd:
+            return {"ok": False, "error": "This event was changed by someone else meanwhile."}
+        _notify_violation(sb, upd[0], result.citizen_id, v.get("location_name"), awareness)
+        out.update({"fined": True, "citizen_name": result.citizen_name})
+    else:
+        sb.table("violations").update({
+            "identity_status": result.status,
+            "face_similarity": round(result.similarity, 4) if result.similarity is not None else None,
+        }).eq("id", violation_id).eq("status", "Unidentified").execute()
+        out["fined"] = False
+    return out
 
 
 async def send_violation_sms(sb, citizen_id: str, notification: Optional[dict]) -> str:

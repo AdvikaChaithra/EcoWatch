@@ -8,6 +8,8 @@ EcoWatch FastAPI — main.py  (v5)
 """
 from pathlib import Path
 import asyncio
+import base64
+from typing import Optional
 import logging
 import os
 import json
@@ -222,6 +224,60 @@ async def _process_identity(event: dict, crops: list):
         _inflight_events.discard(event_id)
 
 
+def _evidence_folder(evidence_dir) -> Optional[Path]:
+    """evidence_snapshots/<id> for a bare id or a path ending in it; None if unsafe/missing."""
+    if not evidence_dir:
+        return None
+    name = Path(str(evidence_dir).replace("\\", "/")).name
+    if not name or name in (".", "..") or not all(ch.isalnum() or ch in "-_" for ch in name):
+        return None
+    return _EVIDENCE_DIR / name
+
+
+def _save_face_crops(evidence_dir, crops: list) -> None:
+    """Keep the head crops with the event's evidence so identification can be retried later."""
+    folder = _evidence_folder(evidence_dir)
+    if folder is None or not crops:
+        return
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, c in enumerate(crops[:8], 1):
+            raw = c.split(",", 1)[1] if isinstance(c, str) and c.startswith("data:") else c
+            (folder / f"face_{i}.jpg").write_bytes(base64.b64decode(raw))
+    except Exception as e:
+        print(f"[Evidence] could not save face crops: {e}")
+
+
+def _load_identity_images(evidence_dir) -> list:
+    """Saved head crops, or the event's key frames for older events recorded without crops."""
+    folder = _evidence_folder(evidence_dir)
+    if folder is None or not folder.is_dir():
+        return []
+    files = sorted(folder.glob("face_*.jpg")) or [folder / n for n in ("1_assoc.jpg", "2_drop.jpg", "3_confirmed.jpg")
+                                                  if (folder / n).exists()]
+    return [base64.b64encode(f.read_bytes()).decode() for f in files]
+
+
+@app.post("/api/violations/{violation_id}/reidentify")
+async def reidentify_violation(violation_id: str, x_engine_api_key: str = Header(default="")):
+    """Admin retry (via the website's server route) of face identification for an unidentified event."""
+    _verify_engine_key(x_engine_api_key)
+    try:
+        sb = get_supabase()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    row = (sb.table("violations").select("evidence_path").eq("id", violation_id).execute().data or [None])[0]
+    if row is None:
+        raise HTTPException(status_code=404, detail="Violation not found")
+    images = _load_identity_images(row.get("evidence_path"))
+    if not images:
+        raise HTTPException(status_code=422, detail="No evidence images are stored for this event.")
+    out = await asyncio.to_thread(identity.reidentify, sb, violation_id, images)
+    if not out.get("ok"):
+        raise HTTPException(status_code=409, detail=out.get("error", "Could not re-check this event."))
+    return out
+
+
 @app.post("/api/littering_event")
 async def littering_event(payload: LitteringEventPayload,
                            x_engine_api_key: str = Header(default="")):
@@ -241,6 +297,7 @@ async def littering_event(payload: LitteringEventPayload,
                                   "ward": loc.get("ward", "")}
     crops = event_dict.pop("face_crops", None) or []
     event_dict.pop("snapshot_b64", None)   # never relay images over WS (A9)
+    _save_face_crops(event_dict.get("evidence_dir"), crops)
     await manager.broadcast(event_dict)
 
     # Engine retries / duplicates: process each event_id once.

@@ -105,6 +105,31 @@ def test_existing_bottle_person_walks_past_is_not_littering():
     assert not events and sm.state in (LitterState.PASS_BY, LitterState.ASSOCIATION_LOST), states
 
 
+def test_poster_on_wall_next_to_person_is_not_littering():
+    """Regression: a sticky note on the wall beside a seated person (never touched, detector
+    jitter of a few px) was confirmed as littering. It never moved, so it was never carried."""
+    t, frames = time.time(), []
+    # Same geometry as the real event: note ~140 px from the person's centre (association score
+    # ~0.13) and flagged "born in hand" by the old centre-in-box test.
+    note = (330, 190, 360, 225)
+    for i in range(70):                               # person sits ~6 s, then leaves
+        j = (i % 3) - 1                               # +-1..3 px box jitter every frame
+        person = (335, 160, 520, 480) if i < 40 else None
+        frames.append(det(t, person, (note[0] + 2 * j, note[1] + j, note[2] + 2 * j, note[3] + j), born=(i == 0)))
+        t += DT
+    sm, events, states = run(frames)
+    assert not events, f"a still background object must never become a violation; states={states}"
+
+
+def test_weak_association_is_rejected_even_if_sequence_completes():
+    """The fine needs real evidence: a borderline person<->object link is discarded."""
+    cfg = LitteringConfig(audit_log_path=os.devnull, min_association_score=0.99)
+    frames = desk_drop_frames(time.time())
+    sm = LitteringStateMachine(1, 2, "CAM_TEST", cfg, frames[0])
+    events = [e for e in (sm.update(f) for f in frames[1:]) if e]
+    assert not events and sm.state == LitterState.FALSE_POSITIVE, sm.state
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0

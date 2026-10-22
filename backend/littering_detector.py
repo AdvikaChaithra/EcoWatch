@@ -110,6 +110,16 @@ class LitteringConfig:
     carry_comotion_threshold: float = 0.4
     # Born-in-hand: if waste first appeared within this many seconds of association start
     born_in_hand_window_s:    float = 1.0
+    # ...and at least this share of the object's box lay inside the person's box (not merely its
+    # centre: with a close camera the person box spans most of the frame, wall posters included)
+    born_in_hand_min_overlap: float = 0.5
+    # Per-frame centre movement below this is detector jitter, not motion (px)
+    jitter_px:                float = 3.0
+
+    # Evidence gates for a fine: a weak person<->object link or low overall confidence is
+    # discarded as FALSE_POSITIVE instead of fining someone for an object they never held.
+    min_association_score:    float = 0.25
+    min_event_confidence:     float = 0.65
 
     # Audit log
     audit_log_path: str = "logs/littering_candidates.jsonl"
@@ -239,22 +249,27 @@ class WasteTrackHistory:
     first_seen: float                         = field(default_factory=time.time)
     last_seen:  float                         = field(default_factory=time.time)
     last_bbox:  Optional[Tuple[int,int,int,int]] = None
+    first_bbox: Optional[Tuple[int,int,int,int]] = None
     # Was waste inside a person bbox when it first appeared? (A4 born-in-hand)
     born_inside_person_bbox: bool = False
 
     def update(self, center: Tuple[int,int], bbox: Tuple[int,int,int,int], ts: float):
+        if self.first_bbox is None:
+            self.first_bbox = bbox
         self.centers.append(center)
         self.timestamps.append(ts)
         self.last_seen = ts
         self.last_bbox = bbox
 
     def was_stationary(self, window_s: float = 2.0, tol_px: float = 20.0) -> bool:
-        if len(self.centers) < 2:
-            return True
-        cutoff = time.time() - window_s
+        """True only with real evidence: seen for at least `window_s` without moving.
+        A brand-new track has no history, which says nothing about being there before."""
+        if len(self.centers) < 2 or (self.timestamps[-1] - self.first_seen) < window_s:
+            return False
+        cutoff = self.timestamps[-1] - window_s
         recent = [c for c, t in zip(self.centers, self.timestamps) if t >= cutoff]
         if len(recent) < 2:
-            return True
+            return False
         xs = [c[0] for c in recent]
         ys = [c[1] for c in recent]
         span = math.sqrt((max(xs)-min(xs))**2 + (max(ys)-min(ys))**2)
@@ -321,7 +336,8 @@ class LitteringStateMachine:
         self._carry_comotion_ratio:  float = 0.0
         self._last_person_center:    Optional[Tuple[int,int]] = initial_det.person_center
         self._last_waste_center:     Optional[Tuple[int,int]] = initial_det.waste_center
-        self._waste_disp_total:      float = 0.0
+        self._waste_disp_total:      float = 0.0   # NET displacement since association began
+        self._assoc_waste_origin:    Optional[Tuple[int,int]] = initial_det.waste_center
 
         # A4-rework: track waste displacement after association (to detect pickup)
         self._post_assoc_waste_start: Optional[Tuple[int,int]] = None
@@ -665,6 +681,12 @@ class LitteringStateMachine:
             + 0.25 * self._stat_score
             + 0.20 * self._depart_score
         )
+        if self._assoc_score < self.cfg.min_association_score or confidence < self.cfg.min_event_confidence:
+            self._go(LitterState.FALSE_POSITIVE)
+            _audit(self, ActionLabel.UNKNOWN,
+                   f"insufficient evidence: assoc={self._assoc_score:.2f} (min {self.cfg.min_association_score}) "
+                   f"conf={confidence:.2f} (min {self.cfg.min_event_confidence})")
+            return None
 
         p_bbox = self._final_person_bbox or pb or self._last_known_person_bbox or (0,0,1,1)
         w_bbox = self._final_waste_bbox  or wb or self._last_known_waste_bbox  or (0,0,1,1)
@@ -716,8 +738,11 @@ class LitteringStateMachine:
             w_vec = (wc[0] - self._last_waste_center[0],
                      wc[1] - self._last_waste_center[1])
             w_disp = math.sqrt(w_vec[0]**2 + w_vec[1]**2)
-            self._waste_disp_total += w_disp
-            if w_disp > 1.0:
+            # Net movement from where the object was when the person came close. Summing every
+            # frame-to-frame wobble let a still poster "move" just from detector jitter.
+            if self._assoc_waste_origin:
+                self._waste_disp_total = max(self._waste_disp_total, _dist(wc, self._assoc_waste_origin))
+            if w_disp > self.cfg.jitter_px:
                 self._comotion_checks += 1
                 if _dot_sign(p_vec, w_vec) > 0.5:
                     self._comotion_agreements += 1

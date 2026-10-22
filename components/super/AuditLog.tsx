@@ -15,7 +15,8 @@ const ACTION_TEXT: Record<string, string> = {
   CORPORATION_ASSIGN: "assigned a whole city corporation",
   WORKER_CREATED: "added worker", WORKER_UPDATE: "edited worker", WORKER_RESET_PIN: "reset worker PIN",
   WORKER_TRANSFER: "transferred worker", WORKER_DEACTIVATE: "deactivated worker", WORKER_ACTIVATE: "re-activated worker",
-  REPORT_APPROVED: "approved a worker's cleanup", REPORT_REJECTED: "rejected a worker's cleanup",
+  REPORT_APPROVED: "approved a worker's cleanup", EVENT_DISMISSED: "dismissed a camera event as a false alarm",
+  EVENT_REIDENTIFIED: "re-ran face identification on a camera event", REPORT_REJECTED: "rejected a worker's cleanup",
   PASSWORD_CHANGED: "changed own password", PIN_CHANGED: "changed own PIN",
 };
 

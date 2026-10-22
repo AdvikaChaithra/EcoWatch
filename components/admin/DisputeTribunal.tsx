@@ -4,8 +4,9 @@ import { EvidenceStrip } from "@/components/shared/EvidenceStrip";
 import { useSectorScope } from "@/hooks/useSectorScope";
 import { useEcoStore } from "@/lib/store";
 import { useState, useEffect } from "react";
-import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Gavel, Eye, X, CheckCircle2, XCircle, Loader2, ScanFace, Ban } from "lucide-react";
 import { getViolations, updateViolationStatus } from "@/lib/supabase";
+import { authFetch } from "@/lib/api";
 import { cn, formatDateTime, statusColor } from "@/lib/utils";
 import { Portal } from "@/components/shared/Portal";
 
@@ -20,6 +21,32 @@ export function DisputeTribunal() {
   const [selected, setSelected] = useState<Violation | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [success, setSuccess] = useState("");
+  const [unidBusy, setUnidBusy] = useState<string | null>(null);
+  const [unidMsg, setUnidMsg] = useState<Record<string, { ok: boolean; text: string }>>({});
+
+  /** Unidentified camera events: retry face identification, or close as a false alarm. */
+  async function unidAction(v: Violation, action: "reidentify" | "dismiss") {
+    if (action === "dismiss" && !confirm("Dismiss this event as a false alarm? No one will be fined.")) return;
+    setUnidBusy(v.id + action);
+    try {
+      const r = await authFetch<{ dismissed?: boolean; fined?: boolean; identity_status?: string; reason?: string;
+        similarity?: number | null; citizen_name?: string }>(`/api/violations/${v.id}`, { method: "PATCH", body: JSON.stringify({ action }) });
+      if (r.dismissed) {
+        setUnidentified((u) => u.filter((x) => x.id !== v.id));
+        setSuccess("Event dismissed as a false alarm.");
+        setTimeout(() => setSuccess(""), 3000);
+      } else if (r.fined) {
+        setUnidentified((u) => u.filter((x) => x.id !== v.id));
+        setSuccess(`Identified ${r.citizen_name ?? "the citizen"} (similarity ${Math.round((r.similarity ?? 0) * 100)}%). Fine issued and the citizen was alerted.`);
+        setTimeout(() => setSuccess(""), 5000);
+      } else {
+        setUnidMsg((m) => ({ ...m, [v.id]: { ok: false, text: `Still not identified: ${r.identity_status}${r.similarity != null ? ` (best similarity ${Math.round(r.similarity * 100)}%)` : ""} — ${r.reason ?? ""}. No fine issued.` } }));
+        setUnidentified((u) => u.map((x) => (x.id === v.id ? { ...x, identity_status: r.identity_status, face_similarity: r.similarity ?? null } as Violation : x)));
+      }
+    } catch (e) {
+      setUnidMsg((m) => ({ ...m, [v.id]: { ok: false, text: errMsg(e, "Could not complete this action.") } }));
+    } finally { setUnidBusy(null); }
+  }
 
   const { inScope, key: scopeKey } = useSectorScope();
   const admin = useEcoStore((st) => st.currentUser);
@@ -57,6 +84,7 @@ export function DisputeTribunal() {
   return (
     <div className="space-y-4">
       <ErrorNote message={error} onDismiss={() => setError("")} />
+      {success && !selected && <p className="text-sm text-eco-300">{success}</p>}
       <div className="flex items-center gap-2 mb-2">
         <Gavel className="w-5 h-5 text-red-400" />
         <h2 className="text-xl font-display font-bold text-slate-100">Dispute Tribunal</h2>
@@ -165,6 +193,19 @@ export function DisputeTribunal() {
                   </p>
                 </button>
                 {openUnid === v.id && <EvidenceStrip evidencePath={v.evidence_path} fallbackUrl={v.snapshot_url} />}
+                {unidMsg[v.id] && <p className="text-xs text-orange-300">{unidMsg[v.id].text}</p>}
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => unidAction(v, "reidentify")} disabled={!!unidBusy}
+                          className="btn-eco-outline text-xs px-3 py-1.5 disabled:opacity-40">
+                    {unidBusy === v.id + "reidentify" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanFace className="w-3.5 h-3.5" />}
+                    Retry identification
+                  </button>
+                  <button onClick={() => unidAction(v, "dismiss")} disabled={!!unidBusy}
+                          className="text-xs px-3 py-1.5 rounded-xl border border-red-500/30 text-red-300 hover:bg-red-500/10 flex items-center gap-1.5 disabled:opacity-40">
+                    {unidBusy === v.id + "dismiss" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                    Dismiss (false alarm)
+                  </button>
+                </div>
               </div>
             ))}
           </div>

@@ -138,6 +138,9 @@ FRAME_Q_SIZE   = 1
 # The live view is redrawn at camera speed from the latest frame + the latest AI overlay, so it
 # stays smooth even when inference is slow (inference speed only affects how often boxes move).
 DISPLAY_FPS    = float(os.getenv("DISPLAY_FPS", "20"))
+# An object that sits still this long while NOT in anyone's hands is part of the scene (poster,
+# note on the wall, item on a shelf): it never starts a littering case unless it is moved.
+BACKGROUND_STILL_S = float(os.getenv("BACKGROUND_STILL_S", "4"))
 FACE_CROPS_MAX = int(os.getenv("FACE_CROPS_MAX", "6"))
 PIPELINE_INTERVAL_S = 0.2  # 5 Hz
 
@@ -210,6 +213,47 @@ class SyntheticWasteTracker:
                 results.append((new_id, det))
 
         return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Background objects (scene memory)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _inside_share(inner, outer) -> float:
+    """Share of `inner` box area that lies inside `outer`."""
+    ix1, iy1 = max(inner[0], outer[0]), max(inner[1], outer[1])
+    ix2, iy2 = min(inner[2], outer[2]), min(inner[3], outer[3])
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    area = max(1, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+    return inter / area
+
+
+class BackgroundObjects:
+    """
+    Remembers litter-like detections that stay put in the scene (posters, a note on the wall,
+    things on a shelf). Stillness only counts while the object is NOT mostly inside a person's
+    box, so a bottle held in the hand never becomes "background". Moving an object resets it.
+    """
+    def __init__(self, still_s: float, move_px: float = 25.0, forget_s: float = 300.0):
+        self._still_s, self._move_px, self._forget_s = still_s, move_px, forget_s
+        self._items: List[Dict[str, Any]] = []
+
+    def update(self, boxes: List[Tuple[int,int,int,int]], person_boxes: List[Tuple[int,int,int,int]], now: float):
+        for b in boxes:
+            c = ((b[0]+b[2])//2, (b[1]+b[3])//2)
+            item = max(self._items, key=lambda it: _iou(it["bbox"], b), default=None)
+            if item is None or _iou(item["bbox"], b) < 0.3:
+                item = {"bbox": b, "anchor": c, "still_since": now, "last_seen": now}
+                self._items.append(item)
+            held = any(_inside_share(b, pb) >= 0.5 for pb in person_boxes)
+            if held or _eucl(c, item["anchor"]) > self._move_px:
+                item["anchor"], item["still_since"] = c, now        # carried or moved: not background
+            item["bbox"], item["last_seen"] = b, now
+        self._items = [it for it in self._items if now - it["last_seen"] < self._forget_s]
+
+    def is_background(self, b: Tuple[int,int,int,int], now: float) -> bool:
+        return any(_iou(it["bbox"], b) >= 0.3 and now - it["still_since"] >= self._still_s
+                   for it in self._items)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -582,8 +626,13 @@ class EvidenceWriter:
                 cv2.putText(arr, lbl, (x1, max(y1-5, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            _draw_box(ev.person_bbox, (0,255,255), f"P#{ev.person_track_id}")
-            _draw_box(ev.waste_bbox,  (0,0,255),   f"W#{ev.waste_track_id}")
+            at = (job.get("boxes") or {}).get(label)
+            p_box = at["p"] if at else ev.person_bbox
+            w_box = at["w"] if at else ev.waste_bbox
+            if p_box:
+                _draw_box(p_box, (0,255,255), f"P#{ev.person_track_id}")
+            if w_box:
+                _draw_box(w_box, (0,0,255),   f"W#{ev.waste_track_id}")
             ts_str = datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:12]
             cv2.putText(arr, f"{label}  {ts_str}", (8, fh-10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,80), 1)
@@ -704,6 +753,7 @@ class VisionEngine:
         self.zones    = ZoneChecker.load("backend/camera_zones.json", CAMERA_ID)
         self.stitcher = WasteTrackStitcher()
         self.synth_tracker = SyntheticWasteTracker()
+        self.background = BackgroundObjects(BACKGROUND_STILL_S)
 
         self._running = False
         self.waste_classes: List[int] = list(TRASH_CLASS_IDS)
@@ -881,12 +931,12 @@ class VisionEngine:
         age = assoc_start_ts - hist.first_seen
         if age > LITTER_CFG.born_in_hand_window_s:
             return False
-        # Use the first recorded center (most accurate for birth position)
-        if hist.centers:
-            birth_c = hist.centers[0]
-            return (pb[0] <= birth_c[0] <= pb[2] and pb[1] <= birth_c[1] <= pb[3])
-        # Fall back to current center
-        return (pb[0] <= wc[0] <= pb[2] and pb[1] <= wc[1] <= pb[3])
+        # Most of the object's box must lie inside the person's box when it first appeared - not
+        # just its centre: with a close camera the person box covers most of the frame.
+        birth = hist.first_bbox or hist.last_bbox
+        if birth is None:
+            return False
+        return _inside_share(birth, pb) >= LITTER_CFG.born_in_hand_min_overlap
 
     # ── Frame processing ──────────────────────────────────────────────────────
 
@@ -983,10 +1033,13 @@ class VisionEngine:
             self._waste_hist[canonical_id].update(rw["center"], rw["bbox"], now)
             wastes.append(rw)
 
-            cv2.rectangle(display, rw["bbox"][:2], rw["bbox"][2:], (0,0,255), 2)
-            cx, cy = rw["center"]
-            cv2.putText(display, f"W#{canonical_id}", (rw["bbox"][0], rw["bbox"][1]-6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,255), 1)
+        self.background.update([w["bbox"] for w in wastes], [p["bbox"] for p in persons], now)
+        for rw in wastes:
+            rw["background"] = self.background.is_background(rw["bbox"], now)
+            col = (140,140,140) if rw["background"] else (0,0,255)
+            cv2.rectangle(display, rw["bbox"][:2], rw["bbox"][2:], col, 1 if rw["background"] else 2)
+            cv2.putText(display, f"W#{rw['id']}" + (" bg" if rw["background"] else ""),
+                        (rw["bbox"][0], rw["bbox"][1]-6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
 
         # Mark lost wastes for stitcher
         observed_ids = {w["id"] for w in wastes}
@@ -1008,7 +1061,7 @@ class VisionEngine:
                     continue
                 sm = self._sm_pool.get(key)
                 if sm is None:
-                    if not self._proximity_check(person, waste):
+                    if waste.get("background") or not self._proximity_check(person, waste):
                         continue
                     # A4 rework: timestamp-based born-in-hand
                     born = self._waste_born_in_hand(
@@ -1203,6 +1256,9 @@ class VisionEngine:
             "event": ev, "ring": self.ring,
             "cam_w": self.camera.width, "cam_h": self.camera.height,
             "t_assoc": t_assoc, "t_drop": t_drop,
+            # where the person / object really were at each key frame (not the final boxes)
+            "boxes": {label: self._boxes_at(ev, ts)
+                      for label, ts in (("1_assoc", t_assoc), ("2_drop", t_drop), ("3_confirmed", ev.timestamp))},
         })
 
         rel_evidence = f"{ev.event_id[:8]}"
@@ -1245,6 +1301,26 @@ class VisionEngine:
         # Confirmed violations matter: retry with backoff (evidence is already on disk regardless).
         if not self._safe_post("/api/littering_event", payload, 10.0, "littering_event", retries=4):
             print(f"[Engine] Event {payload.get('event_id')} NOT delivered; evidence kept at {payload.get('evidence_dir')}")
+
+    def _boxes_at(self, ev: LitteringEvent, ts: float, max_gap: float = 0.8) -> dict:
+        """Person / object boxes nearest to time `ts` (None if that track wasn't seen then)."""
+        out: Dict[str, Any] = {"p": None, "w": None}
+        ph = self._person_hist.get(ev.person_track_id)
+        if ph:
+            t, b = min(ph, key=lambda tb: abs(tb[0] - ts))
+            if abs(t - ts) <= max_gap:
+                out["p"] = tuple(int(v) for v in b)
+        wh = self._waste_hist.get(ev.waste_track_id)
+        if wh and wh.timestamps:
+            i = min(range(len(wh.timestamps)), key=lambda k: abs(wh.timestamps[k] - ts))
+            if abs(wh.timestamps[i] - ts) <= max_gap:
+                cx, cy = wh.centers[i]
+                w2 = (ev.waste_bbox[2] - ev.waste_bbox[0]) // 2
+                h2 = (ev.waste_bbox[3] - ev.waste_bbox[1]) // 2
+                out["w"] = (cx - w2, cy - h2, cx + w2, cy + h2)
+        if out["w"] is None:
+            out["w"] = tuple(ev.waste_bbox)   # the object is the subject of every frame
+        return out
 
     # ── Live view ─────────────────────────────────────────────────────────────
 

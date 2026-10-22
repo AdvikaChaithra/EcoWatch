@@ -49,9 +49,9 @@ class _Res:
 
 
 class _Table:
-    def __init__(self, db, name): self.db, self.name, self._filter, self._op, self._row = db, name, None, "select", None
+    def __init__(self, db, name): self.db, self.name, self._filters, self._op, self._row = db, name, [], "select", None
     def select(self, *_a, **_k): self._op = "select"; return self
-    def eq(self, col, val): self._filter = (col, val); return self
+    def eq(self, col, val): self._filters.append((col, val)); return self
     def insert(self, row):
         self._op, self._row = "insert", row; return self
     def update(self, row): self._op, self._row = "update", row; return self
@@ -63,10 +63,11 @@ class _Table:
             row = dict(self._row, id=f"id{len(rows)+1}")
             rows.append(row)
             return _Res([row])
-        if self._filter:
-            c, v = self._filter
-            return _Res([r for r in rows if r.get(c) == v])
-        return _Res(list(rows))
+        hit = [r for r in rows if all(r.get(c) == v for c, v in self._filters)]
+        if self._op == "update":
+            for r in hit:
+                r.update(self._row)
+        return _Res(hit)
 
 
 class _FakeSB:
@@ -129,3 +130,39 @@ if __name__ == "__main__":
             except Exception:
                 fails += 1; print("FAIL", n); traceback.print_exc()
     sys.exit(1 if fails else 0)
+
+
+# ── admin retry of identification for an unidentified event ──────────────────
+def _unidentified_sb():
+    sb = _FakeSB()
+    sb.db["violations"] = [{"id": "v1", "status": "Unidentified", "identity_status": "NO_MATCH",
+                            "citizen_id": None, "fine_amount": 0, "location_name": "Test Location"}]
+    sb.db["violations_awareness"] = []
+    return sb
+
+
+def test_reidentify_match_issues_fine_and_alert(monkeypatch):
+    sb = _unidentified_sb()
+    monkeypatch.setattr(I, "identify", lambda _sb, _c: I.IdentityResult(
+        status="MATCH", reason="ok", citizen_id="CIT-9", citizen_name="A", similarity=0.71))
+    monkeypatch.setattr(I, "pick_awareness_message", lambda _sb, _cid: "msg")
+    out = I.reidentify(sb, "v1", ["crop"])
+    v = sb.db["violations"][0]
+    assert out["fined"] and v["status"] == "Pending" and v["citizen_id"] == "CIT-9" and v["fine_amount"] == I.FINE_AMOUNT
+    assert sb.db["notifications"][0]["user_id"] == "CIT-9"
+
+
+def test_reidentify_uncertain_never_fines(monkeypatch):
+    sb = _unidentified_sb()
+    monkeypatch.setattr(I, "identify", lambda _sb, _c: I.IdentityResult(status="UNCERTAIN", reason="margin", similarity=0.4))
+    out = I.reidentify(sb, "v1", ["crop"])
+    v = sb.db["violations"][0]
+    assert out["fined"] is False and v["status"] == "Unidentified" and v["citizen_id"] is None
+    assert "notifications" not in sb.db
+
+
+def test_reidentify_refuses_events_that_are_not_unidentified(monkeypatch):
+    sb = _unidentified_sb()
+    sb.db["violations"][0]["status"] = "Paid"
+    assert I.reidentify(sb, "v1", ["crop"])["ok"] is False
+
