@@ -25,9 +25,8 @@ verification and rewards — through four connected portals.
 11. [API overview](#11-api-overview)
 12. [Security design](#12-security-design)
 13. [Testing and checks](#13-testing-and-checks)
-14. [Limitations](#14-limitations)
-15. [Troubleshooting](#15-troubleshooting)
-16. [Further documentation](#16-further-documentation)
+14. [Troubleshooting](#15-troubleshooting)
+15. [Further documentation](#16-further-documentation)
 
 ---
 
@@ -451,24 +450,6 @@ next to a seated person.
 
 ---
 
-## 14. Limitations
-
-- **Speed**: on a laptop CPU the models analyse about 1–2 frames per second. The live video itself runs at
-  camera speed, but detection needs the person and object to stay in view briefly. A GPU is recommended for
-  real use.
-- **Face matching** needs a visible, reasonably frontal face; hats, masks, extreme angles or very low light
-  cause NO_FACE / UNCERTAIN (no fine).
-- **Detection accuracy** has not been measured on a labelled test set; thresholds were tuned by hand.
-- **Database security rules (RLS) are off**: the browser reads and writes the database directly with the public
-  key, and some data is readable by anyone with that key. This is acceptable for a demo with test data only;
-  production needs Supabase Auth + row-level security.
-- Evidence photos are stored on the backend's local disk (`evidence_snapshots/`), not in cloud storage.
-- Payments are simulated; SMS needs Twilio credentials.
-- The camera engine must run on the machine the camera is connected to.
-
----
-
-## 15. Troubleshooting
 
 | Problem | What to check |
 |---|---|
@@ -485,7 +466,7 @@ next to a seated person.
 
 ---
 
-## 16. Further documentation
+## 14. Further documentation
 
 - [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) — original project guide (architecture, repository map,
   roadmap). Where it differs from this README, **this README is current**.
@@ -496,4 +477,3 @@ next to a seated person.
 ---
 
 **Author:** Advika Chaithra · [GitHub: AdvikaChaithra](https://github.com/AdvikaChaithra)
-**License:** none specified yet — add a `LICENSE` file before sharing the code publicly.
